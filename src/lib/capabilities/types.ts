@@ -38,8 +38,9 @@ export interface Capability {
    * Execute one of `tools` with the instance's validated config.
    *
    * Returns plain text, or a `ToolOutput` when the call has more to hand back
-   * than words — property_search returns each listing as a SOURCE so the reply
-   * carries the clickable sources pill, the same as the web tools.
+   * than words — a search-shaped capability returns each result as a SOURCE,
+   * so the reply carries the clickable sources pill, the same as the web
+   * tools do.
    */
   execute(
     tool: string,

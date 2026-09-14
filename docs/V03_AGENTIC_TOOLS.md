@@ -398,12 +398,12 @@ frontend role; both record usage (roles `router`/`curator`).
   network `sandbox_egress` + internal-only reachability from app).
 
 ### Step 10 — Capabilities
-- Decision #5 is the spec. Property adapter interface:
-  `search(params, cfg) → {items, total}`, `getByRef(ref, cfg)`.
-  `property_search {transaction sale|let?, sector residential|commercial def
-  residential, location?, min_price?, max_price?, min_bedrooms?,
-  property_type?, include_unavailable def false, limit def 12 max 25}`;
-  `property_details {ref}`. Tools join group `capability`.
+- Decision #5 is the spec. A capability is a named tool bundle with a
+  format-keyed adapter behind it — `search(params, cfg) → {items, total}` and
+  `getByRef(ref, cfg)` for a lookup-shaped one — shipping OFF and enabled per
+  instance on Admin → Tools. Its tools join group `capability`. The first one
+  built to this shape was for a single client and is not part of the public
+  product; `src/lib/capabilities/local.ts` is where such a bundle registers.
 
 ---
 
