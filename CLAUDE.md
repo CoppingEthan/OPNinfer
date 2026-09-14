@@ -55,7 +55,10 @@ evolves. **Never put secrets here** (API keys live in `.env`, which is git-ignor
   client → `db.<newModel>` undefined → 500s); never `pnpm build` while dev runs
   (see gotchas); when dev UI misbehaves in a long-lived tab, fresh tab + hard
   refresh first.
-- **Docs map:** `README.md` (public-facing, current as of v0.3.3),
+- **Docs map:** `README.md` (the public front page — short by design; keep its
+  version badge and feature list in step with this file),
+  `docs/DEPLOYMENT.md` (running it in production: the script, the proxy
+  requirements, sizing, backups, the Sandbox's credentials),
   `docs/ARCHITECTURE.md` (design rationale; header still says v0.3.1),
   `docs/PROJECT_BRIEF.md` (2026-07-01 narrative snapshot — carries a
   "superseded" banner; read for history, not current state),
