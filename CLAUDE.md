@@ -33,6 +33,25 @@ evolves. **Never put secrets here** (API keys live in `.env`, which is git-ignor
   upstream, ask whether the change is about the product or about one client. If
   it is about the product — and nearly everything is — make it upstream and
   pull it down, even when the bug was found on a client's portal.
+  **In practice that is a branch, not a second checkout.** A deployment keeps
+  ONE clone with two remotes (`origin` private, `upstream` public), and generic
+  work is done on a branch taken from `upstream/main`:
+
+      git fetch upstream
+      git switch -c fix/<thing> upstream/main   # no client layer on this branch
+      …fix it, add the regression, pnpm test…
+      git push upstream HEAD:main               # or open a PR
+      git switch main && git pull upstream main
+
+  Nothing is done twice: the work happens once, on the branch, and the merge
+  brings it back. Branching from `upstream/main` also means the tree you are
+  testing IS the public product — `local.ts` is the empty stub there, so a
+  change that only worked because a client capability happened to be loaded
+  cannot pass unnoticed. Client-specific work is the exception and is committed
+  straight to `main`, never pushed upstream.
+  `./scripts/split-public.sh check` is the backstop: it fails if `main` has
+  edited a file that belongs upstream, which is the mistake that would
+  otherwise make every future pull painful.
 - **Owner-testing working mode:** the owner tests feature-by-feature and
   reports UX feedback or a broken-chat URL/id. Diagnose from the DB +
   `logs/dev.log` FIRST (don't guess), fix, add a **live-harness regression**
