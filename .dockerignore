@@ -1,0 +1,48 @@
+node_modules
+.next
+.git
+.gitignore
+storage
+*.log
+logs
+.env
+.env.*
+!.env.example
+README.md
+CLAUDE.md
+docker-compose*.yml
+Dockerfile
+.dockerignore
+playwright-report
+test-results
+coverage
+.vscode
+.e2e-*
+
+# --- not part of the app image -----------------------------------------------
+# These cost a slow layer write on every build and none of them is used by
+# `next build` or copied into the runtime image.
+#
+# `instances/` matters most: it holds one env file per portal, each containing
+# that instance's OPNINFER_MASTER_KEY, database password and deploy token. They
+# never reached the final image (the runner copies only the standalone build,
+# public/, skills/ and CHANGELOG.md) but they were being written into the
+# BUILDER layer and left sitting in the host's image store for no reason.
+instances
+certificates
+
+# Built from their own contexts (see docker-compose.yml): ./worker, ./sandboxd,
+# and docker/sandbox for the toolchain image.
+worker
+sandboxd
+docker
+
+# Tests, manual harnesses and docs.
+scripts
+e2e
+docs
+test-kit
+.github
+**/*.test.ts
+vitest.config.ts
+playwright.config.ts

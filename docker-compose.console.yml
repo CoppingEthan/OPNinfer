@@ -1,0 +1,49 @@
+# OPNinfer — the OPERATOR CONSOLE: one read-only overview across every portal
+# on this host.
+#
+# The same `opninfer-app` image the portals run, started with
+# OPNINFER_MODE=console: middleware then serves only /console and refuses every
+# portal route, the root layout stops reading branding, and no scheduler
+# starts (see src/lib/mode.ts). One image, one build, deployed twice — a
+# release ships both halves together and there is no second compile.
+#
+# It has NO DATABASE OF ITS OWN. It reads each portal's Postgres directly as a
+# `console_ro` role that deploy.sh creates there with SELECT and nothing else,
+# so the console cannot write to a client's portal because the database
+# refuses it — not because the query layer was careful. Its own accounts live
+# in instances/console/console.env (./deploy.sh console-password) — a
+# SUBDIRECTORY, because deploy.sh treats every `instances/*.env` as a portal.
+#
+# The portal databases are not published on the host, so deploy.sh attaches
+# this container to each instance's compose network after `up` and it reaches
+# them by CONTAINER name (opninfer-<name>-db-1) — unique across the daemon,
+# unlike the `db` service alias every project shares.
+#
+# Managed by ./deploy.sh; run by hand with:
+#   docker compose -p opninfer-console --env-file instances/console/console.env \
+#     -f docker-compose.console.yml up -d
+name: opninfer-console
+
+services:
+  app:
+    image: opninfer-app
+    restart: unless-stopped
+    # Two files on purpose: the first holds the console's own secrets and
+    # accounts and is written ONCE; the second is regenerated on every deploy
+    # with the portal list, so adding an instance needs no second step.
+    env_file:
+      - instances/console/console.env
+      - instances/console/portals.env
+    environment:
+      OPNINFER_MODE: console
+      # Namespaces this container's auth cookies (see auth.config.ts), so the
+      # console can be held open beside every portal on the same host.
+      OPNINFER_INSTANCE: console
+      UV_THREADPOOL_SIZE: "8"
+      # Deliberately unreachable. The console never queries a database of its
+      # own; Prisma still wants the variable to exist, and pointing it at a
+      # closed port means any accidental use fails loudly and immediately
+      # rather than quietly succeeding against something real.
+      DATABASE_URL: postgresql://unused:unused@127.0.0.1:1/unused?connect_timeout=1
+    ports:
+      - "${CONSOLE_PORT:-3000}:3000"

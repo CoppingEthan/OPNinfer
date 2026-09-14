@@ -1,0 +1,176 @@
+# OPNinfer — ONE portal instance: Postgres + one-shot migrator + the Next.js
+# app + the ingestion worker + the sandbox broker. TLS/routing is handled by
+# YOUR reverse proxy — the app publishes plain HTTP on ${APP_PORT} for it.
+#
+# Run through ./deploy.sh, which manages MULTIPLE instances from this one
+# checkout: each instance is a separate compose project (-p opninfer-<name>)
+# with its own env file (instances/<name>.env), so every instance gets its own
+# isolated database + storage volumes (opninfer-<name>_pgdata / _storage).
+# The document/speech engines are SHARED across instances — they live in
+# docker-compose.engines.yml and are reached over the external
+# "opninfer-engines" network.
+#
+# Explicit project name (fallback when -p isn't passed): compose otherwise
+# derives container/volume/network prefixes from the checkout directory name —
+# sandboxd's STORAGE_VOLUME must match this prefix, so it's pinned.
+name: opninfer
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-opninfer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the instance env file}
+      POSTGRES_DB: ${POSTGRES_DB:-opninfer}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opninfer} -d ${POSTGRES_DB:-opninfer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # First boot initializes the whole data directory, which can exceed a
+      # minute when the host is busy (image unpacking, engines starting).
+      # Failures during this window don't count toward retries.
+      start_period: 90s
+
+  # Applies committed migrations once, then exits. The app waits for success.
+  migrate:
+    image: opninfer-migrate
+    build:
+      context: .
+      target: migrator
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    image: opninfer-app
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    env_file: ${INSTANCE_ENV:-.env}
+    environment:
+      # Override the host inside the compose network regardless of the env file.
+      DATABASE_URL: ${DATABASE_URL}
+      # Grow libuv's threadpool (default 4) so concurrent argon2 password hashes
+      # (login) and file I/O don't queue behind each other under load.
+      UV_THREADPOOL_SIZE: "8"
+      # Shared engines (docker-compose.engines.yml, always on).
+      WHISPER_URL: http://whisper:9000
+      TTS_URL: http://kokoro:8880
+      TTS_VOICE: ${TTS_VOICE:-af_heart}
+      # Sandbox broker (v0.3 agentic tools). The app can only ASK; all policy
+      # lives in sandboxd.
+      SANDBOX_BROKER_URL: http://sandboxd:8070
+      SANDBOX_BROKER_TOKEN: ${SANDBOX_BROKER_TOKEN:-}
+      # Sandbox agent tier (v0.4), org-API-key path: where an agent container
+      # reaches this app's credential proxy. The app port is already published
+      # on the host for the reverse proxy, so the container goes back in
+      # through host.docker.internal on that port — nothing new is exposed.
+      AGENT_PROXY_BASE: http://host.docker.internal:${APP_PORT:-3000}
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - engines
+    # Published on the host for the reverse proxy (binds 0.0.0.0 — reachable
+    # from the local network). Each instance gets a distinct APP_PORT.
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+  # Ingestion worker ("router"): prepares uploaded files for the assistant —
+  # magic-byte detection, MarkItDown, spreadsheet/DB schema, ffprobe — and
+  # calls the shared engine services. Shares the storage volume + database.
+  worker:
+    image: opninfer-worker
+    build: ./worker
+    restart: unless-stopped
+    # Bounded (audit 2026-09-05): a handler is one crafted file away from
+    # eating the host's memory; the child-process cap in the worker handles
+    # time, this handles bytes and forks.
+    mem_limit: ${WORKER_MEMORY:-3g}
+    pids_limit: 512
+    # "connected to database" written to a marker file by the loop and
+    # removed on a loop error — what deploy.sh reads instead of the log tail.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/opninfer-worker-db-ok"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      STORAGE_ROOT: /storage
+      GOTENBERG_URL: http://gotenberg:3000
+      DOCLING_URL: http://docling:5001
+      WHISPER_URL: http://whisper:9000
+      WORKER_CONCURRENCY: "2"
+    volumes:
+      - storage:/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - default
+      - engines
+
+  # Sandbox broker ("guard hut", v0.3) — the ONLY container holding the Docker
+  # socket. Enforces all sandbox policy: image allowlist, per-chat pool mounts
+  # (named-volume subpath), egress-only network, resource caps, timeouts,
+  # idle reaping. Internal only — never published on the host.
+  sandboxd:
+    image: opninfer-sandboxd
+    build: ./sandboxd
+    restart: unless-stopped
+    environment:
+      SANDBOX_BROKER_TOKEN: ${SANDBOX_BROKER_TOKEN:?set SANDBOX_BROKER_TOKEN in the instance env file}
+      # THIS instance's storage volume's real docker name
+      # (deploy.sh sets it to opninfer-<instance>_storage).
+      STORAGE_VOLUME: ${STORAGE_VOLUME:-opninfer_storage}
+      OPNINFER_TENANT_ID: ${OPNINFER_TENANT_ID:-default}
+      # Which PORTAL this broker serves. Every instance shares one Docker
+      # daemon, so this is what keeps each one's sandbox containers, labels and
+      # egress network distinct — without it, each instance's idle reaper
+      # force-removes the others' running sandboxes. Separate from the tenant
+      # id because that one names the storage directory and cannot be changed
+      # on an existing instance without orphaning every pool.
+      OPNINFER_INSTANCE: ${OPNINFER_INSTANCE:-default}
+      # "egress" (internet yes, internal network no) or "none".
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-egress}
+      # Sandbox agent tier (v0.4). The credential volume is deliberately NOT a
+      # compose-managed volume: it holds the operator's Claude sign-in and
+      # must survive `down -v`, rebuilds and reaping. Docker creates it on
+      # first use; deploy.sh's `agent-login` writes into it. Per instance.
+      AGENT_IMAGE: opninfer-agent
+      AGENT_CONFIG_VOLUME: opninfer-agent-config-${OPNINFER_INSTANCE:-default}
+      AGENT_MEMORY: ${AGENT_MEMORY:-2g}
+      AGENT_CPUS: ${AGENT_CPUS:-2}
+      AGENT_IDLE_SECONDS: ${AGENT_IDLE_SECONDS:-1800}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8070"
+
+networks:
+  # The shared engines network (created by docker-compose.engines.yml).
+  # Only app + worker join it; db and sandboxd stay instance-internal.
+  engines:
+    external: true
+    name: opninfer-engines
+
+volumes:
+  pgdata:
+  storage:

@@ -1,0 +1,14 @@
+# OPNinfer ingestion worker — router container.
+# MarkItDown is embedded here (lightweight, no models); heavy engines run as
+# their own containers (docling-serve, gotenberg, whisper-asr-webservice).
+markitdown[all]>=0.1.3
+psycopg[binary]>=3.2
+python-magic>=0.4.27
+httpx>=0.27
+pillow>=10.0
+# Group 4 custom handlers (spreadsheet schema / columnar formats)
+pandas>=2.2
+pyarrow>=17.0
+openpyxl>=3.1
+xlrd>=2.0
+odfpy>=1.4

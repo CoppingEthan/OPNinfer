@@ -1,0 +1,481 @@
+// OPNinfer data model.
+// Two tiers: permanent (survives chat deletion) and ephemeral (cascades on
+// conversation delete). Billing data in `usage_records` is NEVER cascade-deleted.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  admin
+  user
+}
+
+enum Provider {
+  openai
+  anthropic_api @map("anthropic-api")
+  google
+}
+
+enum MessageRole {
+  user
+  assistant
+  system
+  tool_call
+  tool_result
+}
+
+// Ingestion lifecycle of a stored file (file-ingestion pipeline). The worker
+// claims `pending` rows, marks them `processing`, and lands on one of the
+// terminal states. `unsupported` = stored fine but only metadata was extracted.
+enum FileStatus {
+  pending
+  processing
+  ready
+  unsupported
+  failed
+}
+
+// Who put the file in the chat's storage pool.
+enum FileKind {
+  upload // the user attached it
+  generated // the assistant produced it (later phase: code-exec outputs)
+}
+
+// ---------------------------------------------------------------------------
+// Permanent tier — survives conversation deletion
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(uuid()) @db.Uuid
+  email         String    @unique
+  name          String? // optional display name (admin-editable)
+  passwordHash  String    @map("password_hash")
+  role          Role      @default(user)
+  emailVerified DateTime? @map("email_verified")
+  disabled      Boolean   @default(false)
+  image         String? // profile-picture asset name (served at /api/avatar/<name>)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  lastActiveAt  DateTime? @map("last_active_at") // bumped on chat activity
+  // Release notes this user has seen (What's new panel). NULL = never seen,
+  // so every pre-existing account gets the panel once — which is how people
+  // discover it exists. Stored per user, not in the browser: reading the notes
+  // on a laptop must not re-show them on a phone.
+  lastSeenVersion String? @map("last_seen_version")
+  // Memory v2 (0.5.1): "pause" keeps what the assistant knows and stops it
+  // learning anything new — the idle-chat pass skips this person and the
+  // remember tool is withheld. Reset is deleting the topic rows.
+  memoryPaused Boolean @default(false) @map("memory_paused")
+  // When the password last changed (audit 2026-09-05). Carried in the session
+  // token at sign-in and compared on the 60-second recheck, so a reset — the
+  // natural response to a stolen session — ends every session issued before
+  // it instead of leaving the thief signed in for the token's 7 days.
+  passwordChangedAt DateTime? @map("password_changed_at")
+  // An admin set this password FOR them (2026-09-07): they can sign in with
+  // it, and then can do nothing else until they choose their own. Set by the
+  // admin password actions, cleared the moment the person changes it.
+  // Exists because emailed reset links are being delivered and then blocked
+  // at the recipient's end, so the operator hands the password over by
+  // another route — and a password someone else knows must not stay live.
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+  // The last time this password actually WORKED (2026-09-09). Distinct from
+  // `lastActiveAt`, which the OWUI importer carries across from the old
+  // system — so on a migrated portal that column cannot tell "signed in
+  // here" from "was a user somewhere else last year". This one is stamped
+  // only by a successful sign-in on THIS portal, so NULL means the account
+  // has never been used since it arrived. That is what lets a failed sign-in
+  // safely offer a temporary password: an account whose password has never
+  // worked has nothing to lose by being given a new one.
+  lastSignInAt DateTime? @map("last_sign_in_at")
+
+  credentials        ProviderCredential[]
+  usageRecords       UsageRecord[]
+  conversations      Conversation[]
+  files              File[]
+  passwordResetTokens PasswordResetToken[]
+  invitesSent        Invite[]             @relation("InviteInviter")
+  memoryTopics       UserMemoryTopic[]
+  feedback           MessageFeedback[]
+  // Shared chats (v0.5): chats this person has been added to, and the
+  // messages they wrote (authorship survives the account: SET NULL).
+  memberships        ConversationMember[]
+  authored           Message[]
+
+  @@map("users")
+}
+
+// User feedback on assistant replies (permanent tier — survives chat
+// deletion). The rated message is ephemeral, so the exchange is SNAPSHOTTED
+// here at rating time (plain-column ids, no FKs to messages/conversations),
+// together with an AI "why" analysis written by the frontend role for the
+// Admin → Feedback page. userId follows the usage_records pattern: SET NULL
+// on account deletion, the entry survives anonymized.
+/// What the Sandbox agent reaches for at runtime — every pip/npm/apt install
+/// and external download it attempts (owner ask, 2026-09-02). Admin → Tools
+/// shows the top ones against what the image already has, so "what should we
+/// bake in next?" is answered from data. Plain columns, no FKs: the tally
+/// outlives chats and accounts, like usage_records.
+model AgentPackageUse {
+  id             String   @id @default(uuid()) @db.Uuid
+  kind           String // pip | npm | apt | gem | cargo | go | download | git
+  name           String // package name — or host for a download, host/path for a clone
+  conversationId String?  @map("conversation_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([kind, name])
+  @@index([createdAt])
+  @@map("agent_package_uses")
+}
+
+model MessageFeedback {
+  id                String   @id @default(uuid()) @db.Uuid
+  // One entry per (reply, rater): in a shared chat two people can rate the
+  // same reply differently (v0.5) — the unique moved from message_id alone
+  // to the pair below.
+  messageId         String   @map("message_id") @db.Uuid
+  conversationId    String   @map("conversation_id") @db.Uuid
+  conversationTitle String?  @map("conversation_title")
+  userId            String?  @map("user_id") @db.Uuid
+  rating            String // "up" | "down"
+  model             String?
+  provider          String?
+  userText          String   @map("user_text") // the prompt that got the rated reply (truncated)
+  assistantText     String   @map("assistant_text") // the rated reply (truncated)
+  summary           String? // frontend-model analysis of why the rating likely happened
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([messageId, userId])
+  @@index([createdAt])
+  @@index([rating])
+  @@map("message_feedback")
+}
+
+/// Memory v2 (0.5.1 — docs/V051_MEMORY.md). The assistant's long-term memory
+/// about one person is FOUR short named notes ("topics": about / replies /
+/// work / rules), each rewritten in full whenever something lasting comes up
+/// — by the remember tool in a chat, or by the pass that reads a chat once it
+/// has been quiet for 30 minutes. Replaced the flat `user_memories` list
+/// (one sentence per row, never merged, never aged); the migration folded the
+/// old rows into each person's "about" note. Cascades with the account;
+/// people read and edit these in Settings → Assistant memory.
+model UserMemoryTopic {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.Uuid
+  /// about | replies | work | rules (src/lib/memory-topics.ts)
+  key       String
+  text      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("user_memory_topics")
+}
+
+// Invite-only access (overrides spec §5 open signup). An admin issues an
+// invite; the recipient sets their password via the single-use token, which
+// creates their verified User and marks the invite accepted.
+model Invite {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String
+  role        Role      @default(user)
+  tokenHash   String    @unique @map("token_hash") // sha-256 of the raw token
+  invitedById String?   @map("invited_by_id") @db.Uuid
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  invitedBy User? @relation("InviteInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@map("invites")
+}
+
+// Single-use password-reset tokens (§5, 1-hour expiry). Stored hashed.
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model ProviderCredential {
+  id             String    @id @default(uuid()) @db.Uuid
+  // Org-level (v0.2): credentials power the shared assistant. `userId` records
+  // the admin who added it; SET NULL keeps the key if that admin is deleted.
+  userId         String?   @map("user_id") @db.Uuid
+  provider       Provider
+  label          String // user-facing nickname
+  encryptedValue Bytes     @map("encrypted_value") // AES-256-GCM, key from env
+  metadata       Json? // e.g. baseUrl override for OpenAI-compatible endpoints
+  createdAt      DateTime  @default(now()) @map("created_at")
+  lastUsedAt     DateTime? @map("last_used_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("provider_credentials")
+}
+
+// Billing/analytics. user_id uses SET NULL so historical records survive
+// account deletion (anonymised). Never cascade-deleted on chat delete.
+model UsageRecord {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String?  @map("user_id") @db.Uuid
+  provider     String
+  model        String
+  // Which assistant role made the call: frontend | conversation | escalation |
+  // failover. Null for pre-v0.2 records.
+  role         String?
+  // `input_tokens` is the FULL-PRICE (uncached) input. Cached tokens are
+  // tracked separately because providers price them differently and report
+  // them on different conventions (normalized in the provider layer).
+  inputTokens      Int    @map("input_tokens")
+  outputTokens     Int    @map("output_tokens")
+  cacheReadTokens  Int    @default(0) @map("cache_read_tokens")
+  cacheWriteTokens Int    @default(0) @map("cache_write_tokens")
+  costEstimate Decimal  @map("cost_estimate") @db.Decimal(10, 6) // USD at log time
+  // Who paid (v0.4): "api" — the org's key, cost_estimate is real money;
+  // "subscription" — the operator's Claude plan, cost_estimate is 0 and
+  // notional_cost holds what those tokens WOULD have cost at API rates.
+  // Lets one table hold both without a $0.00 row dragging the average
+  // cost-per-request down, and shows the plan's value as "saved".
+  billingSource String   @default("api") @map("billing_source")
+  notionalCost  Decimal? @map("notional_cost") @db.Decimal(10, 6)
+  // Sandbox agent runs: which agent session the call belonged to.
+  agentSessionId String? @map("agent_session_id")
+  requestId    String?  @map("request_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([billingSource, createdAt])
+  @@map("usage_records")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  action    String
+  details   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+// Structured application log (v0.2): request/model/escalation/failover events.
+// Streamed live to the admin Logs page and queried for "last N".
+model AppLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  level     String   @default("info") // info | warn | error
+  category  String // chat | model | escalation | failover | auth | admin
+  message   String
+  details   Json?
+  userId    String?  @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  // Admin → Logs' default "Chats" view filters category+message and sorts by
+  // time; on createdAt alone Postgres walks the index backwards discarding
+  // non-chat rows, which lengthens as the log fills with everything else.
+  @@index([category, createdAt])
+  @@map("app_log")
+}
+
+// System-wide key-value settings (SMTP, feature flags).
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral tier — cascade-deletes on conversation delete
+// ---------------------------------------------------------------------------
+
+model Conversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String
+  pinned    Boolean  @default(false)
+  // Incognito chats are auto-deleted when the user leaves them or closes the
+  // browser (spec: incognito). Billing/audit logs survive as with any delete.
+  incognito Boolean  @default(false)
+  // Sandbox (agent tier): the Agent SDK session this chat's agent runs resume
+  // by default, so the agent keeps its own transcript across follow-ups —
+  // "change the colour theme to blue" edits the SAME adverts it made, rather
+  // than reverse-engineering them. Null until the first run; a `fresh` run
+  // replaces it.
+  agentSessionId String? @map("agent_session_id")
+  // Memory v2 (0.5.1): when the idle-chat memory pass last read this chat. The
+  // scheduler picks chats whose newest message is 30+ minutes old AND newer
+  // than this stamp, so each stretch of conversation is read exactly once.
+  memoryPassAt DateTime? @map("memory_pass_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+  files    File[]
+  // Shared chats (v0.5): everyone in the chat once it has been shared — the
+  // owner included, for their per-person state. `userId` above stays the
+  // owner; no rows = a private chat.
+  members  ConversationMember[]
+  // Conversation compaction (2026-09-10): rolling summaries of the older
+  // part of a long chat, newest wins. See src/lib/compaction.ts.
+  compactions ConversationCompaction[]
+
+  @@index([userId])
+  // The sidebar orders every one of a user's chats by recency on each load.
+  @@index([userId, updatedAt])
+  @@map("conversations")
+}
+
+// A compaction: the older part of a conversation, summarised by the
+// front-end model so the reply model is sent the summary plus the most
+// recent turns instead of the whole history. Only the NEWEST row for a
+// conversation is used; older ones stay as a record of what was summarised
+// when. `boundaryMessageId` is the LAST message the summary covers — if that
+// row is ever deleted (an edit/revert from before it), the compaction is
+// invalid and the full history is used until the next turn re-compacts.
+// Nothing in `messages` is changed by compaction.
+model ConversationCompaction {
+  id                String   @id @default(uuid()) @db.Uuid
+  conversationId    String   @map("conversation_id") @db.Uuid
+  summary           String
+  boundaryMessageId String   @map("boundary_message_id") @db.Uuid
+  boundaryAt        DateTime @map("boundary_at")
+  messagesCovered   Int      @map("messages_covered")
+  tokensBefore      Int      @map("tokens_before")
+  tokensAfter       Int      @map("tokens_after")
+  provider          String
+  model             String
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("conversation_compactions")
+}
+
+model Message {
+  id             String      @id @default(uuid()) @db.Uuid
+  conversationId String      @map("conversation_id") @db.Uuid
+  role           MessageRole
+  content        String
+  model          String?
+  provider       String?
+  // Tool calls / escalation markers (v0.2). Null for plain text turns.
+  meta           Json?
+  // Who wrote a user turn (v0.5 shared chats). Back-filled to the chat's
+  // owner for every existing user row by the migration, so NULL now means
+  // "the author's account was deleted", not "unknown". Null on assistant rows.
+  userId         String?     @map("user_id") @db.Uuid
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@index([userId])
+  // Every read of a thread is "this conversation, in time order" — the chat
+  // page, the chat route (twice per turn), the admin viewer, the exporter.
+  // With conversationId alone Postgres sorts the whole set each time, and a
+  // migrated 500-message thread carries multi-MB `meta` columns.
+  @@index([conversationId, createdAt])
+  // Powers the image-time estimate's "recent assistant replies" lookup, which
+  // ran as a full scan of the largest table, inline in the turn.
+  @@index([role, createdAt])
+  @@map("messages")
+}
+
+/// Shared chats (v0.5 — docs/V05_SHARED_CHATS.md). A row per person in a
+/// shared chat, the owner included: the owner stays `conversations.user_id`
+/// (nothing about existing chats changes), and this table carries who else
+/// may see and write in it plus each person's own state — their star (the
+/// owner's stays on the conversation) and when they last opened it (the
+/// sidebar's unread dot). A chat with no rows is private. Cascades both ways:
+/// deleting the chat or the person removes the membership.
+model ConversationMember {
+  id             String    @id @default(uuid()) @db.Uuid
+  conversationId String    @map("conversation_id") @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  invitedById    String?   @map("invited_by_id") @db.Uuid
+  pinned         Boolean   @default(false)
+  lastReadAt     DateTime? @map("last_read_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_members")
+}
+
+model File {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  conversationId String?  @map("conversation_id") @db.Uuid
+  filename       String // original filename
+  mimeType       String   @map("mime_type") // client-declared MIME (untrusted)
+  sizeBytes      BigInt   @map("size_bytes")
+  storagePath    String   @map("storage_path") // relative path under storage root
+
+  // --- Ingestion pipeline (worker-managed) ---------------------------------
+  kind           FileKind   @default(upload)
+  status         FileStatus @default(pending)
+  // MIME sniffed from magic bytes by the worker (extensions/client lie).
+  detectedMime   String?    @map("detected_mime")
+  // Which routing group prepared it: markitdown | libreoffice | docling |
+  // spreadsheet | database | audio | video | passthrough | metadata.
+  processorGroup String?    @map("processor_group")
+  // Relative path (under the storage root) of the prepared-content artifact
+  // (.opninfer/<id>.md). Null when only metadata was extracted.
+  contentPath    String?    @map("content_path")
+  // Metadata block: dimensions, duration, codecs, sheet/table schema summary,
+  // EXIF, page counts — whatever the handler emits. Shown to the model.
+  meta           Json?
+  // Rough token count of the prepared content (len/4) for manifest budgeting.
+  tokenEstimate  Int?       @map("token_estimate")
+  error          String?
+  attempts       Int        @default(0)
+  // Worker claim timestamp — lets a crashed worker's rows be re-claimed.
+  claimedAt      DateTime?  @map("claimed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([conversationId])
+  @@index([status]) // worker queue poll
+  @@map("files")
+}

@@ -1,0 +1,116 @@
+# Local development services: Postgres + the ingestion worker (+ the file
+# engines). The Next.js app itself runs on the host (`pnpm dev`).
+#
+#   docker compose -f docker-compose.dev.yml up -d            # db + worker + gotenberg
+#   docker compose -f docker-compose.dev.yml --profile heavy up -d   # + docling + whisper
+#
+# The worker shares the host's ./storage tree (bind mount) and the same
+# database, so files uploaded through the dev app get processed live.
+#
+# Explicit project name: compose otherwise derives container/volume/network
+# prefixes from the checkout directory name, so pin it regardless of what
+# the directory is called.
+name: opninfer
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: opninfer-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opninfer
+      POSTGRES_PASSWORD: opninfer
+      POSTGRES_DB: opninfer
+    ports:
+      # Loopback only (audit 2026-09-05): the dev box is used on a LAN and this
+      # is a default password over every dev chat and user row.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - opninfer_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opninfer"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  worker:
+    build: ./worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://opninfer:opninfer@db:5432/opninfer
+      STORAGE_ROOT: /storage
+      GOTENBERG_URL: http://gotenberg:3000
+      DOCLING_URL: http://docling:5001
+      WHISPER_URL: http://whisper:9000
+      WORKER_CONCURRENCY: "2"
+    volumes:
+      - ./storage:/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # LibreOffice conversions (legacy Office/ODF → PDF). Lightweight, always on.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    command: ["gotenberg", "--api-timeout=120s"]
+
+  # Sandbox broker ("guard hut") — the ONLY holder of the Docker socket. The
+  # host-side dev app reaches it on loopback :8070. Set in .env:
+  #   SANDBOX_BROKER_URL=http://localhost:8070
+  #   SANDBOX_BROKER_TOKEN=<any long random string, same value here>
+  #   STORAGE_HOST_ROOT=<absolute host path of ./storage>
+  sandboxd:
+    build: ./sandboxd
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8070:8070"
+    environment:
+      SANDBOX_BROKER_TOKEN: ${SANDBOX_BROKER_TOKEN:?set SANDBOX_BROKER_TOKEN in .env}
+      STORAGE_HOST_ROOT: ${STORAGE_HOST_ROOT:?set STORAGE_HOST_ROOT in .env (absolute host path of ./storage)}
+      OPNINFER_TENANT_ID: ${OPNINFER_TENANT_ID:-default}
+      SANDBOX_NETWORK: ${SANDBOX_NETWORK:-egress}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # --- heavy engines (opt-in: --profile heavy) ------------------------------
+  # OCR / complex-PDF extraction. Loads layout models — needs real RAM.
+  docling:
+    image: quay.io/docling-project/docling-serve-cpu:v1.26.0
+    profiles: ["heavy"]
+    restart: unless-stopped
+    environment:
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "2"
+
+  # Text-to-speech (Kokoro-82M via Kokoro-FastAPI, OpenAI-compatible
+  # /v1/audio/speech with chunked streaming — audio starts playing while the
+  # rest is still generating). CPU image ≈2x realtime; on a GPU host swap the
+  # image for ghcr.io/remsky/kokoro-fastapi-gpu. Loopback-published for the
+  # host-side dev app (/api/tts) — set TTS_URL=http://localhost:8880 in .env.
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    profiles: ["heavy"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8880:8880"
+
+  # Audio transcription (faster-whisper). Downloads the model on first start.
+  # Port published on loopback so the HOST-side dev app can reach it for the
+  # live mic dictation route (/api/stt) — set WHISPER_URL=http://localhost:9000
+  # in .env.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:v1.9.1
+    profiles: ["heavy"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: small
+      ASR_DEVICE: cpu
+      MODEL_IDLE_TIMEOUT: "300"
+    volumes:
+      - whisper_cache:/root/.cache
+
+volumes:
+  opninfer_pgdata:
+  whisper_cache:

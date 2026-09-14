@@ -1,0 +1,15 @@
+# pnpm 10+ reads project settings from here rather than package.json.
+# Allow build/postinstall scripts for these trusted packages:
+#   sharp           — Next.js image optimization
+#   @prisma/* / prisma — Prisma engine download + client generation
+allowBuilds:
+  sharp: true
+  '@prisma/client': true
+  '@prisma/engines': true
+  prisma: true
+  # OWUI-migration importer reads webui.db (SQLite) server-side
+  better-sqlite3: true
+  # genai/protobufjs postinstall scripts are not needed at runtime.
+  '@google/genai': false
+  protobufjs: false
+  esbuild: true

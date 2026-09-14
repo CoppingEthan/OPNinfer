@@ -1,0 +1,11 @@
+# Enforce LF line endings across platforms (Windows dev, Linux prod). §10.3
+* text=auto eol=lf
+
+# Binary assets — never normalize.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

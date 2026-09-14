@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  # Runs ONLY in the public repository, and is the reason it is safe to develop
+  # the product upstream while client tooling lives in a private downstream
+  # clone: it fails the build if anything client-specific has reached this
+  # repository, whether as a file or as a string in a shared one. The condition
+  # means the same workflow file can sit in both repositories unchanged — which
+  # it must, or it becomes a merge conflict on every pull.
+  public-guard:
+    if: ${{ github.repository == 'CoppingEthan/OPNinfer' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: ./scripts/split-public.sh guard
+
+  # Type-check, unit tests, and a production build.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # No `version:` here — it's read from the `packageManager` field in
+      # package.json (pnpm@11.9.0). Passing both makes action-setup error out.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prisma generate
+      - run: pnpm typecheck
+      - run: pnpm test
+      # The Python worker's own suite. Standard library only — no pip install,
+      # no database, no API keys. It covers `libpq_url`, the Prisma-vs-libpq
+      # DATABASE_URL split that left production ingesting nothing for 8 days
+      # while every container reported healthy.
+      - name: Worker unit tests
+        run: python3 -m unittest discover worker/tests
+      - name: Build
+        run: pnpm build
+        env:
+          # force-dynamic pages don't touch the DB at build; a dummy URL keeps
+          # Prisma client construction happy.
+          DATABASE_URL: postgresql://user:pass@localhost:5432/db?schema=public
+          AUTH_SECRET: build-only-placeholder-not-used-at-build
+          OPNINFER_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+  # Browser end-to-end suite against a real Postgres + the production server.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: opninfer_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/opninfer_e2e?schema=public
+      AUTH_URL: http://127.0.0.1:3100
+    steps:
+      - uses: actions/checkout@v7
+      # No `version:` here — it's read from the `packageManager` field in
+      # package.json (pnpm@11.9.0). Passing both makes action-setup error out.
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Generate runtime secrets
+        run: |
+          echo "AUTH_SECRET=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "OPNINFER_MASTER_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - run: pnpm prisma generate
+      - run: pnpm prisma migrate deploy
+      - run: pnpm build
+
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: pnpm exec playwright test
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

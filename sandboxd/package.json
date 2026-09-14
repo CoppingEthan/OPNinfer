@@ -1,0 +1,14 @@
+{
+  "name": "opninfer-sandboxd",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "OPNinfer sandbox broker — the only holder of the Docker socket. Narrow API; enforces all sandbox policy.",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.2"
+  }
+}
