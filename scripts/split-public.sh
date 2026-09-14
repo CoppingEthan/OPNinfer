@@ -112,28 +112,28 @@ check_invariant() {
   return $fail
 }
 
+# "Is anything private here?" — but that question means something different
+# depending on which repository is asking, and getting it wrong makes the check
+# useless in one of them.
+#
+#   PUBLIC repo (no conf): ask it of THIS tree. Nothing private may be here.
+#   PRIVATE deployment (conf): the private files are SUPPOSED to be here, so
+#     asking it of this tree would fail every time and teach nobody anything.
+#     Ask it of what this deployment WOULD PUBLISH instead — export from HEAD
+#     into a temporary tree and check that. Same question, right subject.
 cmd_guard() {
-  local fail=0
-  check_invariant "$ROOT" || fail=1
-
-  # A private deployment checks its own names as well. The public repository
-  # has no list to check, which is the point.
-  if [ "$HAVE_CONF" = 1 ] && [ -n "$FORBIDDEN" ]; then
-    local hits
-    hits="$(git -C "$ROOT" ls-files -z | xargs -0 grep -rilE "$FORBIDDEN" 2>/dev/null || true)"
-    if [ -n "$hits" ]; then
-      echo "Client references found:" >&2
-      echo "$hits" | sed 's/^/  /' >&2
-      fail=1
-    fi
-  fi
-
-  [ "$fail" = 0 ] || { echo >&2; echo "Guard FAILED." >&2; exit 1; }
   if [ "$HAVE_CONF" = 1 ]; then
-    echo "Guard: clean (invariant + this deployment's own list)."
-  else
-    echo "Guard: clean (invariant)."
+    local tmp status=0
+    tmp="$(mktemp -d)"
+    cmd_export "$tmp/tree" >/dev/null || status=1
+    rm -rf "$tmp"
+    [ "$status" = 0 ] || exit 1
+    echo "Guard: what this deployment would publish is clean (invariant + its own list)."
+    return 0
   fi
+
+  check_invariant "$ROOT" || { echo >&2; echo "Guard FAILED." >&2; exit 1; }
+  echo "Guard: clean (invariant)."
 }
 
 cmd_list() {
