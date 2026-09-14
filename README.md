@@ -17,6 +17,13 @@
   <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-336791.svg">
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screenshot-dark.png">
+    <img src=".github/assets/screenshot-light.png" alt="The OPNinfer chat workspace" width="900">
+  </picture>
+</p>
+
 An **admin** holds the provider API keys — encrypted at rest — and configures a
 single branded *"[Company] AI Assistant"*. Everyone else gets a polished chat
 interface and nothing else: no settings, no model picker, no keys. Every

@@ -390,7 +390,7 @@ src/
 prisma/schema.prisma        data model + migrations
 CHANGELOG.md                release notes, shown in-app by the What's new panel
                             (MUST be COPYed in the Dockerfile — see gotchas)
-scripts/                    61 manual live-test + seed harnesses (NOT in the test
+scripts/                    manual live-test + seed harnesses (NOT in the test
                             suite; the ones named in this file are the load-bearing
                             regressions, not an exhaustive list)
 deploy.sh                   production init/update for ALL instances on the host
