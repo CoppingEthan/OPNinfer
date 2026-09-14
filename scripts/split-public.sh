@@ -158,6 +158,15 @@ cmd_export() {
 
   # From HEAD, not the working tree: an export must be reproducible, and must
   # never pick up a file someone forgot to commit.
+  #
+  # Which cuts both ways, so say so. Checking HEAD means an uncommitted leak
+  # passes silently, and a clean result on a dirty tree is false confidence
+  # about the very thing you are running this to be sure of.
+  if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+    echo "NOTE: uncommitted changes are NOT checked — this reads HEAD." >&2
+    echo "      Commit first if you are checking something you just edited." >&2
+    echo >&2
+  fi
   git -C "$ROOT" archive HEAD | tar -x -C "$dest"
 
   local f
