@@ -17,6 +17,8 @@ import {
   togglePin,
 } from "@/app/actions/conversations";
 import { leaveChat } from "@/app/actions/sharing";
+import { createFolder, deleteFolder, moveToFolder, renameFolder } from "@/app/actions/folders";
+import { FolderPicker, FolderSection, useOpenFolders, type FolderItem } from "./folders-ui";
 import { useConversations } from "./conversations-store";
 import { SearchModal } from "./search-modal";
 import { Avatar } from "./avatar";
@@ -27,6 +29,8 @@ export interface ConversationItem {
   title: string;
   /** YOUR star — the owner's lives on the chat, a member's on their membership. */
   pinned: boolean;
+  /** YOUR folder, same per-person rule as the star. Null = not filed. */
+  folderId?: string | null;
   updatedAt: string;
   /** Shared chats (v0.5): true once the chat has people in it besides you. */
   shared: boolean;
@@ -91,9 +95,11 @@ async function downloadChat(id: string, title: string) {
 export function Sidebar({
   collapsed = false,
   isAdmin = false,
+  folders: initialFolders = [],
 }: {
   collapsed?: boolean;
   isAdmin?: boolean;
+  folders?: FolderItem[];
 }) {
   const { conversations, patch, remove } = useConversations();
   const pathname = usePathname();
@@ -102,6 +108,42 @@ export function Sidebar({
     ? pathname.slice("/chat/".length)
     : null;
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // Folders are held locally so create/rename/delete land immediately; the
+  // server action revalidates /chat behind them.
+  const [folders, setFolders] = useState<FolderItem[]>(initialFolders);
+  useEffect(() => setFolders(initialFolders), [initialFolders]);
+  const { open: openFolders, toggle: toggleFolder } = useOpenFolders();
+  /** Which chats the picker is about to move: [] when it is closed. */
+  const [picking, setPicking] = useState<string[]>([]);
+
+  const row = (c: ConversationItem) => (
+    <ConversationRow
+      key={c.id}
+      item={c}
+      active={c.id === activeId}
+      selectionMode={selectionMode}
+      selected={selected.has(c.id)}
+      onToggleSelect={() => toggleSelect(c.id)}
+      onStartSelection={() => startSelection(c.id)}
+      onPatch={patch}
+      onRemoved={(id) => {
+        remove([id]);
+        if (activeId === id) router.push("/chat");
+      }}
+      onDownload={downloadChat}
+      onMoveToFolder={() => setPicking([c.id])}
+    />
+  );
+
+  const fileChats = (ids: string[], folderId: string | null) => {
+    if (ids.length === 0) return;
+    for (const id of ids) patch(id, { folderId });
+    setPicking([]);
+    startBulk(async () => {
+      await moveToFolder(ids, folderId);
+    });
+  };
 
   // Multi-select ("select" then bulk delete).
   const [selectionMode, setSelectionMode] = useState(false);
@@ -153,9 +195,20 @@ export function Sidebar({
   // Starred first (personal), then every SHARED chat — the ones you shared
   // and the ones shared with you, in one section (owner decision 4) — then
   // your private chats by date.
+  //
+  // A FOLDERED chat leaves the date buckets — listing it twice would make the
+  // sidebar longer, not tidier. A starred one still shows under Starred,
+  // because a star is a shortcut rather than a place.
+  const folderIds = new Set(folders.map((f) => f.id));
+  const filed = (c: ConversationItem) => !!c.folderId && folderIds.has(c.folderId);
   const pinned = conversations.filter((c) => c.pinned);
-  const sharedChats = conversations.filter((c) => !c.pinned && c.shared);
-  const rest = conversations.filter((c) => !c.pinned && !c.shared);
+  const sharedChats = conversations.filter((c) => !c.pinned && c.shared && !filed(c));
+  const rest = conversations.filter((c) => !c.pinned && !c.shared && !filed(c));
+  const byFolder = new Map<string, ConversationItem[]>();
+  for (const c of conversations) {
+    if (!filed(c) || c.pinned) continue;
+    (byFolder.get(c.folderId!) ?? byFolder.set(c.folderId!, []).get(c.folderId!)!).push(c);
+  }
   const buckets = new Map<string, ConversationItem[]>();
   for (const c of rest) {
     const b = dateBucket(c.updatedAt);
@@ -172,7 +225,7 @@ export function Sidebar({
         {isAdmin ? (
           <RailButton href="/admin" label="Admin" icon={<AdminIcon />} anim="oi-icon-pop" />
         ) : null}
-        <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
       </nav>
     );
   }
@@ -189,6 +242,14 @@ export function Sidebar({
         <div className="mt-2 flex items-center justify-between gap-2 rounded-2xl bg-surface-hover px-3 py-1.5 text-xs">
           <span className="font-medium text-foreground">{selected.size} selected</span>
           <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setPicking([...selected])}
+              disabled={bulkPending || selected.size === 0}
+              className="rounded-lg px-2 py-1 font-medium text-foreground transition-colors hover:bg-surface disabled:opacity-40"
+            >
+              Move
+            </button>
             <button
               type="button"
               onClick={deleteSelected}
@@ -216,73 +277,79 @@ export function Sidebar({
           </p>
         ) : null}
 
+        {folders.map((f) => (
+          <FolderSection
+            key={f.id}
+            folder={f}
+            count={(byFolder.get(f.id) ?? []).length}
+            open={openFolders.has(f.id)}
+            onToggle={() => toggleFolder(f.id)}
+            onRename={(name) => {
+              setFolders((prev) => prev.map((x) => (x.id === f.id ? { ...x, name } : x)));
+              startBulk(async () => {
+                await renameFolder(f.id, name);
+              });
+            }}
+            onDelete={() => {
+              if (!confirm(`Delete the folder "${f.name}"? The chats in it stay.`)) return;
+              setFolders((prev) => prev.filter((x) => x.id !== f.id));
+              for (const c of byFolder.get(f.id) ?? []) patch(c.id, { folderId: null });
+              startBulk(async () => {
+                await deleteFolder(f.id);
+              });
+            }}
+            onDropChat={(id) => fileChats([id], f.id)}
+          >
+            {(byFolder.get(f.id) ?? []).map((c) => row(c))}
+            {(byFolder.get(f.id) ?? []).length === 0 ? (
+              <li className="px-2.5 py-2 text-xs text-muted">Drag a chat here.</li>
+            ) : null}
+          </FolderSection>
+        ))}
+
         {pinned.length > 0 ? (
           <Section title="Starred">
-            {pinned.map((c) => (
-              <ConversationRow
-                key={c.id}
-                item={c}
-                active={c.id === activeId}
-                selectionMode={selectionMode}
-                selected={selected.has(c.id)}
-                onToggleSelect={() => toggleSelect(c.id)}
-                onStartSelection={() => startSelection(c.id)}
-                onPatch={patch}
-                onRemoved={(id) => {
-                  remove([id]);
-                  if (activeId === id) router.push("/chat");
-                }}
-                onDownload={downloadChat}
-              />
-            ))}
+            {pinned.map((c) => row(c))}
           </Section>
         ) : null}
 
         {sharedChats.length > 0 ? (
           <Section title="Shared" dataSection="shared">
-            {sharedChats.map((c) => (
-              <ConversationRow
-                key={c.id}
-                item={c}
-                active={c.id === activeId}
-                selectionMode={selectionMode}
-                selected={selected.has(c.id)}
-                onToggleSelect={() => toggleSelect(c.id)}
-                onStartSelection={() => startSelection(c.id)}
-                onPatch={patch}
-                onRemoved={(id) => {
-                  remove([id]);
-                  if (activeId === id) router.push("/chat");
-                }}
-                onDownload={downloadChat}
-              />
-            ))}
+            {sharedChats.map((c) => row(c))}
           </Section>
         ) : null}
 
         {BUCKET_ORDER.filter((b) => buckets.has(b)).map((b) => (
           <Section key={b} title={b}>
-            {buckets.get(b)!.map((c) => (
-              <ConversationRow
-                key={c.id}
-                item={c}
-                active={c.id === activeId}
-                selectionMode={selectionMode}
-                selected={selected.has(c.id)}
-                onToggleSelect={() => toggleSelect(c.id)}
-                onStartSelection={() => startSelection(c.id)}
-                onPatch={patch}
-                onRemoved={(id) => {
-                  remove([id]);
-                  if (activeId === id) router.push("/chat");
-                }}
-                onDownload={downloadChat}
-              />
-            ))}
+            {buckets.get(b)!.map((c) => row(c))}
           </Section>
         ))}
       </div>
 
+      <FolderPicker
+        open={picking.length > 0}
+        folders={folders}
+        count={picking.length}
+        currentId={
+          picking.length === 1
+            ? (conversations.find((c) => c.id === picking[0])?.folderId ?? null)
+            : null
+        }
+        onPick={(folderId) => fileChats(picking, folderId)}
+        onCreate={(name) => {
+          const ids = picking;
+          setPicking([]);
+          startBulk(async () => {
+            const res = await createFolder(name);
+            if (res.id) {
+              setFolders((prev) => [...prev, { id: res.id!, name }]);
+              for (const id of ids) patch(id, { folderId: res.id });
+              await moveToFolder(ids, res.id);
+            }
+          });
+        }}
+        onClose={() => setPicking([])}
+      />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </nav>
   );
@@ -373,6 +440,7 @@ function ConversationRow({
   selected,
   onToggleSelect,
   onStartSelection,
+  onMoveToFolder,
   onPatch,
   onRemoved,
   onDownload,
@@ -383,6 +451,7 @@ function ConversationRow({
   selected: boolean;
   onToggleSelect: () => void;
   onStartSelection: () => void;
+  onMoveToFolder: () => void;
   onPatch: (id: string, partial: Partial<ConversationItem>) => void;
   onRemoved: (id: string) => void;
   onDownload: (id: string, title: string) => void;
@@ -448,6 +517,11 @@ function ConversationRow({
 
   return (
     <li
+      draggable={!selectionMode}
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/x-opninfer-chat", item.id);
+        e.dataTransfer.effectAllowed = "move";
+      }}
       data-conversation={item.id}
       data-shared={item.shared ? "1" : "0"}
       data-mine={item.mine ? "1" : "0"}
@@ -536,6 +610,7 @@ function ConversationRow({
                 })
               }
               onRename={() => setEditing(true)}
+              onMoveToFolder={onMoveToFolder}
               onRenameAI={() => {
                 setAiPending(true);
                 (async () => {
@@ -562,6 +637,14 @@ function ConversationRow({
   );
 }
 
+function FolderMenuIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+      <path d="M2.5 6.2c0-.6.5-1.1 1.1-1.1h3.1c.3 0 .6.1.8.4l.9 1c.2.2.5.4.8.4h6.2c.6 0 1.1.5 1.1 1.1v6.2c0 .6-.5 1.1-1.1 1.1H3.6c-.6 0-1.1-.5-1.1-1.1V6.2Z" />
+    </svg>
+  );
+}
+
 interface RowMenuItem {
   label: string;
   icon: ReactNode;
@@ -576,6 +659,7 @@ function RowMenu({
   busy,
   onStar,
   onRename,
+  onMoveToFolder,
   onRenameAI,
   onDownload,
   onPeople,
@@ -589,6 +673,7 @@ function RowMenu({
   busy: boolean;
   onStar: () => void;
   onRename: () => void;
+  onMoveToFolder: () => void;
   onRenameAI: () => void;
   onDownload: () => void;
   onPeople: () => void;
@@ -632,6 +717,7 @@ function RowMenu({
     { label: pinned ? "Unstar" : "Star", icon: <StarIcon filled={pinned} />, onClick: onStar },
     { label: "Rename", icon: <PencilIcon />, onClick: onRename },
     { label: "Rename with AI", icon: <SparkleMenuIcon />, onClick: onRenameAI },
+    { label: "Move to folder", icon: <FolderMenuIcon />, onClick: onMoveToFolder },
     { label: "Download", icon: <DownloadIcon />, onClick: onDownload },
     { label: "People", icon: <PeopleIcon className="h-4 w-4" />, onClick: onPeople },
     ...(mine

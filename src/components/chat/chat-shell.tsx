@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/branding";
 import { Sidebar, type ConversationItem } from "./sidebar";
+import type { FolderItem } from "./folders-ui";
 import { Avatar } from "./avatar";
 import { UserMenu } from "./user-menu";
 import { WhatsNew } from "./whats-new";
@@ -22,6 +23,7 @@ export const PEOPLE_EVENT = "oi:people";
 
 export function ChatShell({
   conversations,
+  folders = [],
   userId,
   email,
   name,
@@ -31,6 +33,7 @@ export function ChatShell({
   children,
 }: {
   conversations: ConversationItem[];
+  folders?: FolderItem[];
   userId: string;
   email: string;
   name?: string;
@@ -99,7 +102,7 @@ export function ChatShell({
           )}
 
           <div className="min-h-0 flex-1" onClick={() => setOpen(false)}>
-            <Sidebar collapsed={collapsed} isAdmin={isAdmin} />
+            <Sidebar collapsed={collapsed} isAdmin={isAdmin} folders={folders} />
           </div>
 
           {/* Bottom identity chip — controls moved to the top-right menu (§7). */}

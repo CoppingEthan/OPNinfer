@@ -16,10 +16,11 @@ export const CONVERSATION_ITEM_SELECT = {
   id: true,
   title: true,
   pinned: true,
+  folderId: true,
   updatedAt: true,
   userId: true,
   user: { select: { name: true, email: true, image: true } },
-  members: { select: { userId: true, pinned: true, lastReadAt: true } },
+  members: { select: { userId: true, pinned: true, lastReadAt: true, folderId: true } },
 } satisfies Prisma.ConversationSelect;
 
 export type ConversationItemRow = Prisma.ConversationGetPayload<{ select: typeof CONVERSATION_ITEM_SELECT }>;
@@ -32,6 +33,9 @@ export function toConversationItem(c: ConversationItemRow, forUserId: string): C
     id: c.id,
     title: c.title,
     pinned: mine ? c.pinned : !!me?.pinned,
+    // Per person, like the star above: your filing of a chat somebody shared
+    // with you lives on your membership row, not on their conversation.
+    folderId: (mine ? c.folderId : me?.folderId) ?? null,
     updatedAt: c.updatedAt.toISOString(),
     shared,
     mine,
@@ -61,4 +65,13 @@ export async function sidebarItemFor(conversationId: string, userId: string): Pr
     select: CONVERSATION_ITEM_SELECT,
   });
   return row ? toConversationItem(row, userId) : null;
+}
+
+/** This person's folders, in their chosen order. */
+export async function sidebarFolders(userId: string): Promise<{ id: string; name: string }[]> {
+  return db.folder.findMany({
+    where: { userId },
+    orderBy: [{ position: "asc" }, { name: "asc" }],
+    select: { id: true, name: true },
+  });
 }
