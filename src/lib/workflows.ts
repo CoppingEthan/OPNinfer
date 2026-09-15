@@ -151,6 +151,11 @@ export function buildWorkflowsBlock(list: WorkflowSummary[]): string | null {
     "WORKFLOWS — this person's own playbooks for jobs they repeat. If the " +
     "request matches one, call load_workflow FIRST and follow it: their way " +
     "of doing a thing beats your default way of doing it.\n" +
+    "Do this even when the task looks small enough to just do — a short " +
+    "rewrite is still a rewrite, and the workflow exists precisely because " +
+    "their version differs from the obvious one. Match on the KIND of job, " +
+    "not the size of it. Loading one costs a single call; getting it wrong " +
+    "costs them the thing they wrote the workflow to avoid.\n" +
     shown
       .map((w) => `- ${w.name}: ${w.description}${w.sharedBy ? ` (shared by ${w.sharedBy})` : ""}`)
       .join("\n")

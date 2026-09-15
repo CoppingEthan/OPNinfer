@@ -200,7 +200,8 @@ export async function noteWorkflow(workflowId: string, note: string): Promise<bo
 export const DEFAULT_WORKFLOWS = [
   {
     name: "Rewrite a document",
-    description: "Take an existing document and rewrite it in our tone, keeping the facts.",
+    description:
+      "Rewrite or tighten anything already written — a document, a page, an email, a paragraph — in our tone.",
     body: `Use this whenever I hand you a document and ask for it to be rewritten,
 tightened, or put into our tone.
 
@@ -225,6 +226,8 @@ tell me what you assumed.
 ## Give me back
 
 The rewritten document in full, then a few bullets on what changed and why.
+
+## Notes from past runs
 `,
   },
   {
@@ -245,6 +248,8 @@ The rewritten document in full, then a few bullets on what changed and why.
 ## Give me back
 
 The reply, ready to send. Then one line on anything I need to check first.
+
+## Notes from past runs
 `,
   },
 ] as const;
