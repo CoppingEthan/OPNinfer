@@ -16,6 +16,7 @@ import {
 } from "@/app/actions/workflows";
 import type { WorkflowListItem } from "@/lib/workflow-store";
 import { Avatar } from "@/components/chat/avatar";
+import { useDialog } from "@/components/ui/dialog";
 
 /**
  * The Workflows page: a list on the left, the markdown on the right.
@@ -38,6 +39,7 @@ function ago(iso: string | null): string | null {
 }
 
 export function WorkflowsView({ initial }: { initial: WorkflowListItem[] }) {
+  const dialog = useDialog();
   const [list, setList] = useState(initial);
   const [selectedId, setSelectedId] = useState<string | null>(initial[0]?.id ?? null);
   const [msg, setMsg] = useState<{ error?: string; success?: string }>({});
@@ -99,8 +101,15 @@ export function WorkflowsView({ initial }: { initial: WorkflowListItem[] }) {
           <button
             type="button"
             disabled={pending}
-            onClick={() => {
-              const name = prompt("Name this workflow (e.g. “Rewrite a document”)");
+            onClick={async () => {
+              const name = await dialog.prompt({
+                title: "New workflow",
+                body: "Name the JOB, not the document — the assistant matches requests against it.",
+                label: "Name",
+                placeholder: "Rewrite a document",
+                maxLength: 60,
+                confirmLabel: "Create",
+              });
               if (!name?.trim()) return;
               start(async () => {
                 const res = await createWorkflow(name);
@@ -195,8 +204,14 @@ export function WorkflowsView({ initial }: { initial: WorkflowListItem[] }) {
                   <button
                     type="button"
                     disabled={pending}
-                    onClick={() => {
-                      const name = prompt("Rename this workflow", selected.name);
+                    onClick={async () => {
+                      const name = await dialog.prompt({
+                        title: "Rename workflow",
+                        label: "Name",
+                        initial: selected.name,
+                        maxLength: 60,
+                        confirmLabel: "Rename",
+                      });
                       if (!name?.trim() || name === selected.name) return;
                       start(async () => {
                         const res = await renameWorkflow(selected.id, name);
@@ -211,8 +226,16 @@ export function WorkflowsView({ initial }: { initial: WorkflowListItem[] }) {
                   <button
                     type="button"
                     disabled={pending}
-                    onClick={() => {
-                      if (!confirm(`Delete "${selected.name}"? This can't be undone.`)) return;
+                    onClick={async () => {
+                      if (
+                        !(await dialog.confirm({
+                          title: `Delete “${selected.name}”?`,
+                          body: "This can't be undone. Anyone it is shared with loses it too.",
+                          confirmLabel: "Delete",
+                          danger: true,
+                        }))
+                      )
+                        return;
                       start(async () => {
                         const res = await deleteWorkflow(selected.id);
                         setMsg(res);
@@ -231,8 +254,16 @@ export function WorkflowsView({ initial }: { initial: WorkflowListItem[] }) {
                 <button
                   type="button"
                   disabled={pending}
-                  onClick={() => {
-                    if (!confirm(`Leave "${selected.name}"? It will disappear from your list.`)) return;
+                  onClick={async () => {
+                    if (
+                      !(await dialog.confirm({
+                        title: `Leave “${selected.name}”?`,
+                        body: "It disappears from your list. The owner keeps it.",
+                        confirmLabel: "Leave",
+                        danger: true,
+                      }))
+                    )
+                      return;
                     start(async () => {
                       const res = await leaveWorkflow(selected.id);
                       setMsg(res);

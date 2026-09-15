@@ -27,6 +27,7 @@ import { uid } from "@/lib/uid";
 import { APP_NAME, APP_VERSION, pageTitle } from "@/lib/version";
 import { WELCOME_MESSAGES, formatWelcome } from "@/lib/welcome";
 import { openArtifact } from "./artifact-panel";
+import { ComposerMenu, type PickedWorkflow } from "./composer-menu";
 import { previewKind } from "@/lib/artifact";
 
 /** Characters of live console output held per run block (the UI shows 5 lines;
@@ -171,6 +172,10 @@ export function ChatWindow({
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // A workflow chosen from the + menu, for the NEXT message only. Deliberately
+  // per-message rather than sticky: a playbook you forgot was on would quietly
+  // shape every reply, and you would blame the model.
+  const [picked, setPicked] = useState<PickedWorkflow | null>(null);
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragDepth = useRef(0);
   // Tracks a live incognito conversation so it can be deleted on leave/close.
@@ -1077,6 +1082,7 @@ export function ChatWindow({
         fileIds?: string[];
         regenerate?: boolean;
         editMessageId?: string;
+        workflowId?: string;
       },
       assistantId: string,
       userLocalId?: string,
@@ -1098,6 +1104,10 @@ export function ChatWindow({
             editMessageId: payload.editMessageId,
             extendedThinking: thinkHard,
             incognito,
+            // A hand-picked workflow applies to THIS message. A retry re-runs
+            // the same turn, so it carries over; an edit is a new message and
+            // does not.
+            workflowId: payload.workflowId,
           }),
           signal: controller.signal,
         });
@@ -1199,9 +1209,15 @@ export function ChatWindow({
         { id: assistantId, role: "assistant", content: "" },
       ]);
       setStreaming(true);
-      await runStream({ content, fileIds }, assistantId, userLocalId);
+      // The chosen workflow rides THIS message and is then cleared, so it can
+      // never quietly shape a later one.
+      const useWorkflow = picked?.id;
+      setPicked(null);
+      await runStream({ content, fileIds, workflowId: useWorkflow }, assistantId, userLocalId);
     },
-    [assistant.configured, attachments, runStream, me],
+    // `picked` belongs here: it is read inside the callback, so leaving it out
+    // would freeze it at null and a chosen workflow would never be sent.
+    [assistant.configured, attachments, runStream, me, picked],
   );
 
   // Retry: regenerate the last reply. Drops the trailing assistant message(s)
@@ -1293,6 +1309,7 @@ export function ChatWindow({
             content,
             fileIds: sent.map((a) => a.id),
             extendedThinking: thinkHard,
+            workflowId: picked?.id,
           }),
         });
         const data = (await res.json().catch(() => ({}))) as { queued?: boolean; error?: string };
@@ -1724,18 +1741,34 @@ export function ChatWindow({
           }
           className="max-h-52 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-sm text-foreground placeholder:text-muted focus:outline-none focus-visible:outline-none disabled:opacity-60"
         />
+        {picked ? (
+          <div className="px-2.5 pb-1.5">
+            <span
+              data-picked-workflow={picked.id}
+              className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs text-accent"
+            >
+              <span className="shrink-0 opacity-80">Using workflow</span>
+              <span className="truncate font-medium">{picked.name}</span>
+              <button
+                type="button"
+                aria-label="Don't use this workflow"
+                onClick={() => setPicked(null)}
+                className="shrink-0 rounded-full p-0.5 transition-colors hover:bg-accent/20"
+              >
+                <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+                  <path d="M4.5 4.5l7 7m0-7-7 7" />
+                </svg>
+              </button>
+            </span>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              aria-label="Attach files"
-              title="Attach files"
-              onClick={() => fileInputRef.current?.click()}
+            <ComposerMenu
               disabled={streaming || uploading || !assistant.configured}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border text-muted transition-colors hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
-            >
-              <PlusIcon />
-            </button>
+              onAttach={() => fileInputRef.current?.click()}
+              onPickWorkflow={setPicked}
+            />
             {assistant.canThinkHard ? (
               <button
                 type="button"

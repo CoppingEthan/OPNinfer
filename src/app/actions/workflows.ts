@@ -41,6 +41,22 @@ async function access(id: string, userId: string) {
   return role ? { role, updatedAt: w.updatedAt } : null;
 }
 
+export interface WorkflowBrief {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/**
+ * Just enough for the composer menu. Does NOT seed the defaults — that belongs
+ * to the Workflows page, so opening a menu never quietly creates anything.
+ */
+export async function listMyWorkflowsBrief(): Promise<WorkflowBrief[]> {
+  const user = await requireUser();
+  const list = await listWorkflows(user.id);
+  return list.map((w) => ({ id: w.id, name: w.name, description: w.description }));
+}
+
 /** The page's list. Seeds the two examples for someone who has none. */
 export async function myWorkflows(): Promise<WorkflowListItem[]> {
   const user = await requireUser();

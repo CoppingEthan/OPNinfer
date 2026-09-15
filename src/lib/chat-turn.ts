@@ -13,8 +13,8 @@ import { orderThreadRows } from "@/lib/thread-order";
 import { compactConversation, compactedHistory, loadCompaction, replayedTokens } from "@/lib/compaction";
 import { getCachedTokenLimits } from "@/lib/limits";
 import { buildSkillsBlock } from "@/lib/tools/skills";
-import { buildWorkflowsBlock } from "@/lib/workflows";
-import { workflowSummaries } from "@/lib/workflow-store";
+import { buildWorkflowsBlock, canUse } from "@/lib/workflows";
+import { accessFor, loadWorkflowBody, workflowSummaries } from "@/lib/workflow-store";
 import { estimateImageMs } from "@/lib/tools/images";
 import { VizStreamParser, type VizEvent } from "@/lib/viz-stream";
 import { VIZ_PROTOCOL_BLOCK } from "@/lib/tools/visualize";
@@ -82,6 +82,8 @@ export interface TurnInput {
    *  after it (including files attached to the removed turns), then send
    *  `content` (+ kept `fileIds`) as the new turn from that point. */
   editMessageId?: string;
+  /** A workflow the person chose from the composer menu, for THIS message. */
+  workflowId?: string;
   /** The browser tab that sent it — its own live echoes are skipped. */
   origin?: string;
 }
@@ -601,8 +603,15 @@ export async function startChatTurn(input: TurnInput): Promise<TurnStartResult> 
       // Memory: the user's persistent memory block rides along too (never in
       // incognito, never in a shared chat). Built AFTER the ingestion wait so
       // the manifest inlines the freshly prepared content (e.g. the transcript).
-      const [fileManifest, memoryBlock, skillsBlock, workflowsBlock, turnImages, memoryPaused] =
-        await Promise.all([
+      const [
+        fileManifest,
+        memoryBlock,
+        skillsBlock,
+        workflowsBlock,
+        chosenWorkflow,
+        turnImages,
+        memoryPaused,
+      ] = await Promise.all([
         buildFileManifest(newConversationId),
         useMemory ? buildMemoryBlock(userId) : Promise.resolve(null),
         buildSkillsBlock(),
@@ -610,6 +619,17 @@ export async function startChatTurn(input: TurnInput): Promise<TurnStartResult> 
         // names and one-line descriptions every turn, bodies on demand. Null
         // when they have none, so nobody pays for a feature they don't use.
         workflowSummaries(userId).then(buildWorkflowsBlock),
+        // A workflow chosen by HAND for this message. Loaded and injected as
+        // an instruction rather than advertised, because picking one from the
+        // menu is the person saying "do it this way", not "you might like to".
+        input.workflowId
+          ? (async () => {
+              const access = await accessFor(input.workflowId!, userId);
+              if (!access || !canUse(access.role)) return null;
+              const body = await loadWorkflowBody(input.workflowId!);
+              return body ? { name: access.name, body } : null;
+            })()
+          : Promise.resolve(null),
         regenerate
           ? Promise.resolve([])
           : loadImagesForTurn(newConversationId, input.fileIds),
@@ -662,6 +682,20 @@ export async function startChatTurn(input: TurnInput): Promise<TurnStartResult> 
         ...(skillsBlock ? [{ role: "system" as const, content: skillsBlock }] : []),
         ...(workflowsBlock && !toolset.disabledGroups.includes("workflows")
           ? [{ role: "system" as const, content: workflowsBlock }]
+          : []),
+        // The hand-picked one goes in WHOLE, and says so. No tool call, no
+        // judgement about whether it applies — they already made that call.
+        ...(chosenWorkflow
+          ? [
+              {
+                role: "system" as const,
+                content:
+                  `THE PERSON HAS CHOSEN THE WORKFLOW "${chosenWorkflow.name}" FOR THIS ` +
+                  "MESSAGE. Follow it. Do not ask whether to use it and do not load it " +
+                  "again — it is reproduced in full below. Where it is silent, use your " +
+                  `judgement.\n\n${chosenWorkflow.body}`,
+              },
+            ]
           : []),
         ...(fileManifest ? [{ role: "system" as const, content: fileManifest }] : []),
         // v0.5: in a shared chat the model should know it is talking to

@@ -27,6 +27,11 @@ const bodySchema = z
      *  after it (including files attached to the removed turns), then send
      *  `content` (+ kept `fileIds`) as the new turn from that point. */
     editMessageId: z.string().uuid().optional(),
+    /** The person picked one of their own workflows from the composer's +
+     *  menu. Unlike the per-turn WORKFLOWS list, which the model may or may
+     *  not act on, this one is loaded and injected as an instruction — the
+     *  whole point of choosing it by hand is that it is not a suggestion. */
+    workflowId: z.string().uuid().optional(),
   })
   .refine(
     (d) => (d.regenerate ? !!d.conversationId : !!d.content && d.content.trim().length > 0),
