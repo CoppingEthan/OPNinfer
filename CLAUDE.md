@@ -280,7 +280,11 @@ src/
                             assistant may perform on somebody's playbook
     workflow-store.ts       the DB half + the two seeded defaults
     artifact.ts             the artifact panel, PURE: what a file previews AS
-                            (never an image), the size cap, the versioned URL
+                            (never a raster image), the size cap, the versioned
+                            URL, and the delimited-file table parser
+    office-preview.ts       Word/Excel/PowerPoint -> PDF through the SAME
+                            LibreOffice container the ingestion worker uses,
+                            cached beside the file's prepared text
     changelog.ts            release-notes parsing + the "should this interrupt
                             the user" rules (pure, tested; What's new panel)
     uid.ts                  client-safe UUID (crypto.randomUUID needs a secure context)
@@ -413,6 +417,10 @@ src/
     chat/folders-ui.tsx     the sidebar's folder section + the pick-a-folder
                             dialog (drag-and-drop AND a menu, deliberately)
     chat/artifact-panel.tsx the right-hand file preview
+    chat/composer-menu.tsx  the composer's `+`: attach a file, or pick a
+                            workflow to FORCE for this one message
+    ui/dialog.tsx           the app's own confirm/prompt. There is no other
+                            kind — window.confirm/prompt are banned (gotchas)
     workflows/              the Workflows page (list + markdown editor +
                             sharing), rendered inside the CHAT shell
     settings/ ui/ + auth-card.tsx branding.tsx logo.tsx theme-toggle.tsx
@@ -1038,11 +1046,68 @@ match. Collapsed → an icon rail (logo, new chat, search, admin, avatar).
   updates almost instantly" true: the browser caches an in-page fetch by URL
   alone, so a re-presented file under the same id would otherwise keep showing
   the old bytes (the bug already fixed once for re-presented images).
-  Framed previews render at a fixed 1200px and SCALE to fit — a design artifact
-  is built at an exact size, and the frame is sandboxed into a unique origin so
-  its real width cannot be measured from here.
-  Proof: `artifact.test.ts` (17) + `scripts/test-artifact-panel.ts` (15 live
-  browser checks, no model calls).
+  An HTML artifact renders at a fixed 1200px and SCALES to fit — it was built
+  at an exact size, and the frame is sandboxed into a unique origin so its real
+  width cannot be measured from here. A PDF is the opposite: the browser's
+  viewer already fits the page, so it gets a plain 100% frame (scaling one made
+  a Word document a postage stamp ringed by a full-size toolbar) plus
+  `#toolbar=0&navpanes=0&view=FitH`, since the panel's own header already
+  carries the name, size, Download and Expand.
+  **Office files preview with their REAL layout** (owner ask, 2026-09-15: "I
+  want them to preview exact as office suite would show them"). Not a
+  per-format JavaScript renderer — that is three dependencies, three sets of
+  fidelity bugs and three things to keep current. **Gotenberg was already in
+  the stack**: the LibreOffice container the ingestion worker uses for legacy
+  Office files lays a document out exactly as the suite would and hands back a
+  PDF, which every browser draws. `office-preview.ts` converts once (~2s for a
+  13 KB .docx) and caches the PDF beside the worker's `.opninfer/<id>.md`, so
+  it dies with the chat and is re-made when the source is newer; temp-file +
+  rename, so a half-written PDF is never served. With no engine configured it
+  returns null and the route falls back to the prepared TEXT — the words
+  without the layout is an honest degradation, a spinner that never resolves is
+  not, and `canPreview` refuses the file outright when there is neither.
+  **This needed `GOTENBERG_URL` on the APP service, which only the worker had**
+  (both compose files; dev publishes the container on `127.0.0.1:3009`).
+  Alongside it: a delimited file (.csv/.tsv) draws as a TABLE rather than raw
+  text, quoted commas intact and capped rows that SAY they were capped; a .zip,
+  .eml or .epub shows the worker's conversion under a banner saying so; and an
+  SVG previews rather than being swept up by the never-an-image rule — it is
+  vector source, never rendered inline in a reply, so unlike a PNG there is
+  nothing to duplicate.
+  The panel SLIDES in (owner ask) — see the keyframe gotcha, which is why it
+  is an animation and not a transition.
+  Proof: `artifact.test.ts` (27) + `artifact-panel.test.ts` (4 source pins, for
+  the two failures with no runtime symptom) + `scripts/test-artifact-panel.ts`
+  (24 live browser checks, no model calls: a real .docx built in the harness
+  converts and comes back `application/pdf` with `%PDF-` bytes in an
+  un-sandboxed frame, the CSV's quoted comma stays in one cell, the SVG is
+  served and IS sandboxed, and the slide is measured frame by frame) +
+  `scripts/test-office-preview.ts` (24 against real documents out of this
+  instance's own database, picked by query so the harness cannot be tuned to
+  one file: real PDF bytes with page geometry, the cache used and then
+  abandoned when the source changes, and the no-engine fallback as a negative
+  control).
+- **The composer's `+` menu, and FORCING a workflow** (owner ask, 2026-09-15:
+  "that way we can force the LLM to do it"). `+` opens on click or after a
+  350ms hover — long enough that crossing it on the way to the text box does
+  not fire it — and offers "Upload a file" and a "Workflows" submenu of the
+  person's own playbooks. It opens UPWARDS, because the composer is at the
+  bottom of the screen.
+  Picking one is not a hint. `chat-turn.ts` loads that workflow and puts it in
+  the turn as a system instruction reproduced IN FULL, telling the model to
+  follow it and not to ask whether to or load it again — chosen over hoping the
+  per-turn WORKFLOWS list catches its eye, which is the whole reason the owner
+  asked for the menu. The pick lasts ONE message: leaving it on would silently
+  run a playbook over a conversation somebody thought they had finished with.
+  The submenu row must OPEN on click, never toggle: pointing at it already
+  opens the submenu, so a toggle meant the click you were aiming with shut it
+  again, which reads as a flicker. Touch has no hover, so the click still has
+  to open it.
+  Proof: `scripts/test-composer-menu.ts` (23 live browser checks against a real
+  model) whose spine is a NEGATIVE CONTROL — the SAME question is asked twice,
+  and the workflow's unmistakable house rule is absent without the pick and
+  present with it, then absent again on the next message. Asking once and
+  finding the rule would prove nothing: the model might have done it anyway.
 - **Completion chime** (§13, `chime.ts`): a synthesised two-note Web-Audio ding plays
   when a reply finishes while the tab is hidden/unfocused (`isTabInactive()`).
 - **Paced word reveal** (§15): the SSE stream (Anthropic lands in big multi-word
@@ -2507,6 +2572,55 @@ login screen). The assistant's own name + logo are separate (assistant config).
   `~/.claude` owned by uid 1000). On Windows a Linux symlink on a bind mount
   is invisible to host `lstat` — check from inside a container. `DEBUG_CLAUDE_
   AGENT_SDK=1` writes the SDK's own transport log (path printed to stderr).
+- **Chrome's PDF viewer REFUSES to run in a sandboxed frame, and says nothing
+  about it** (2026-09-15). The artifact panel framed every preview with
+  `sandbox=""` as belt and braces beside the route's `CSP: sandbox` — correct
+  and load-bearing for an agent-written HTML page, and fatal for a PDF: the
+  viewer is a browser extension, so a sandboxed frame draws the sad-face
+  placeholder instead. Every Office and PDF preview was therefore a blank
+  panel, with no error, no console line and nothing to search a log for.
+  Measured rather than reasoned, all six ways: `sandbox=""` AND
+  `sandbox="allow-scripts"` both fail with or without the header; no attribute
+  renders the document. So the attribute is applied to MARKUP only. Dropping it
+  for a PDF costs little — the response still carries `CSP: sandbox` (opaque
+  origin) and `nosniff` with an explicit `application/pdf`, so it can never be
+  re-read as HTML, and what a PDF's own scripts can reach is the viewer, never
+  the page. **Playwright's bundled Chromium has no PDF viewer at all**, so it
+  draws a blank frame whether the code is right or wrong: this is only visible
+  in real Chrome (`chromium.launch({ channel: "chrome" })`, which is what
+  `scripts/shot-workspace.ts` uses), and what the headless harness CAN check is
+  the attribute. Pinned from source by `artifact-panel.test.ts`.
+- **An element that mounts and animates in the same frame does not animate.**
+  A CSS transition needs the browser to have painted the starting state; a
+  panel inserted at `translate-x-full` and flipped to `translate-x-0` one
+  `requestAnimationFrame` later simply jumps, because React's commit and the
+  compositor race and the two style changes coalesce. The first cut looked
+  right in every class name and the harness measured 45 frames at ONE position.
+  Use a KEYFRAME (`.oi-artifact-in`), which plays from its own first frame
+  whenever that frame happens; the exit stays a class swap, since by then the
+  element has been on screen for a while. `backwards`, never `both` — a
+  transform left behind gives the element its own stacking layer for ever, the
+  lesson the file cards' entrance animation already taught. And a harness must
+  measure the MOTION (sample `getComputedStyle().transform` per frame from an
+  observer planted BEFORE the open), never the class name — and must wait for
+  the slide to settle before measuring geometry, or it reports frame one of the
+  animation as a layout bug.
+- **`window.confirm` / `window.prompt` / `window.alert` are BANNED** (owner,
+  2026-09-15: "please make this native in the same way we do other pop ups,
+  make sure no more of these exist, that is poor coding and UX"). They are
+  unthemed, unstyleable, block the whole tab, and on a phone they name the
+  origin — a portal that asks for a name in a grey Chrome box does not look
+  like the product it is part of. `useDialog()` (`components/ui/dialog.tsx`)
+  returns promise-based `confirm`/`prompt` rendered as real, themed, portaled
+  dialogs; `DialogProvider` is mounted in `providers.tsx`. There were fourteen
+  native calls across the app and all of them went, not just the two this round
+  added. `ui/dialog.test.ts` scans every `.tsx` and fails on a new one (it skips
+  comment lines — an early version flagged four mentions in prose), and
+  `scripts/test-composer-menu.ts` proves the replacement in a browser with
+  Playwright's `dialog` event as the negative control: a native box opening
+  fails the run rather than being quietly auto-dismissed. Outside a provider
+  the hook still falls back to the browser's own, which looks like it works —
+  which is why the browser check exists as well as the source scan.
 - **A test that shells out to `ls -R` on Windows runs under cmd.exe and
   compares two empty strings** — it passed while checking nothing. Walk with
   `node:fs`, and make a containment check FAIL if either tree is empty.
