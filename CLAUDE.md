@@ -275,6 +275,12 @@ src/
     version.ts welcome.ts thinking-words.ts   app version + pageTitle(); greetings; gerund words
     pwa.ts                  installable-app metadata, PURE: the manifest shape,
                             the home-screen label rule, the icon URLs (tested)
+    workflows.ts            workflows PURE core: who may do what, the per-turn
+                            block, and appendNote — the ONE operation the
+                            assistant may perform on somebody's playbook
+    workflow-store.ts       the DB half + the two seeded defaults
+    artifact.ts             the artifact panel, PURE: what a file previews AS
+                            (never an image), the size cap, the versioned URL
     changelog.ts            release-notes parsing + the "should this interrupt
                             the user" rules (pure, tested; What's new panel)
     uid.ts                  client-safe UUID (crypto.randomUUID needs a secure context)
@@ -300,6 +306,8 @@ src/
                             role and the notes rewritten (owner: silent, not per reply)
     tools/chat-search.ts    search_my_chats — Postgres full-text over the
                             person's own past chats, dated snippets + links
+    tools/workflows.ts      load_workflow / note_workflow / save_workflow —
+                            three tools, and the split is the safety story
     feedback.ts             thumbs-rating → message_feedback snapshot + AI "why" analysis
     provenance.ts           LLM-side source notes appended to replayed assistant turns
     tts.ts                  speakableText + splitSpeech segment ramp + ID3 strip (reply TTS)
@@ -402,6 +410,11 @@ src/
                             people-table, logs-view, ui.tsx
     pwa-register.tsx        registers public/sw.js (secure context only, like
                             the mic — undefined over a plain-http LAN address)
+    chat/folders-ui.tsx     the sidebar's folder section + the pick-a-folder
+                            dialog (drag-and-drop AND a menu, deliberately)
+    chat/artifact-panel.tsx the right-hand file preview
+    workflows/              the Workflows page (list + markdown editor +
+                            sharing), rendered inside the CHAT shell
     settings/ ui/ + auth-card.tsx branding.tsx logo.tsx theme-toggle.tsx
   auth.ts auth.config.ts middleware.ts
   instrumentation.ts        server-startup hook (register) — delegates to instrumentation-node
@@ -949,6 +962,87 @@ match. Collapsed → an icon rail (logo, new chat, search, admin, avatar).
   WITH a negative control that removes the worker and checks the page is gone,
   the API still answering from the server underneath a live worker, and a
   390px viewport with no sideways overflow).
+- **Folders** — a person's own grouping for the sidebar. A collapsible section
+  per folder above Starred; chats go in by DRAG or through a kebab item that
+  opens a small picker (both on purpose — drag is what people reach for first,
+  the picker is what works on a phone, with a trackpad, and for anyone who
+  would rather not drag). Multi-select gained a Move button onto the same
+  picker.
+  The filing is PER PERSON, mirroring `pinned` exactly: the owner's on
+  `conversations.folder_id`, a member's on their `conversation_members` row, so
+  two people in a shared chat can file it differently and tidying never
+  rearranges a colleague's sidebar. A foldered chat LEAVES the date buckets
+  (listing it twice makes the sidebar longer, not tidier); a starred one still
+  shows under Starred, because a star is a shortcut rather than a place.
+  Both foreign keys are ON DELETE SET NULL and the confirm says so — a sidebar
+  tidy-up that could destroy conversations is one nobody would dare use.
+  **Filing writes a RAW update**: `conversations.updated_at` is `@updatedAt`
+  and is what the sidebar sorts by, so going through Prisma's update would jump
+  every chat you filed to the top of your list — the memory-pass lesson, met
+  again.
+- **Workflows** (`src/lib/workflows.ts` + `workflow-store.ts` +
+  `tools/workflows.ts`) — a person's own markdown playbook for a job they
+  repeat ("how I want a document rewritten"). Deliberately the SAME shape as a
+  skill: name plus a one-line description ride every turn, the body costs a
+  tool call. A skill ships with the product; a workflow belongs to a user, who
+  edits it by hand on `/workflows` and can share it.
+  **There are THREE tools, and the split is the whole safety story:**
+  `load_workflow` reads it, `note_workflow` appends ONE lesson under a
+  `## Notes from past runs` heading it owns, and `save_workflow` writes or
+  replaces the instructions. `note_workflow` exists so that "they prefer
+  British spelling" never travels through a whole-document rewrite — the
+  playbook is the user's own writing, and an assistant able to rewrite it in
+  order to record what it learned is one confused turn away from deleting an
+  afternoon's work. Both tool descriptions say which is which in terms, because
+  that is exactly the distinction a model collapses if left to infer it.
+  **Sharing is chat sharing:** ONE document plus `workflow_members` rows that
+  ARE the sharing, so an edit by anyone with access is seen by everyone. A copy
+  each would drift, and a drifted shared workflow is worse than no sharing.
+  Saving carries a STALE-WRITE GUARD (the editor sends back the timestamp it
+  loaded) rather than last-writer-wins: a shared document that silently loses
+  edits is worse than one that occasionally asks you to reload.
+  Names are disambiguated per person before the model ever sees them — it
+  addresses a workflow BY NAME, so your "Rewrite a document" and a colleague's
+  shared one of the same name would be an unresolvable instruction.
+  **The steering had to be strengthened after the live harness caught it:** the
+  first version said "if the request matches one", and asked to rewrite a
+  paragraph the model simply rewrote it, because the job looked small enough to
+  just do. The block now says to match on the KIND of job rather than the size
+  of it, and to load even when the task looks trivial. Two seeded defaults per
+  person, created on first visit to the page only — never on a chat turn, so
+  nobody is handed workflows they never asked to see.
+  Proof: `workflows.test.ts` (22) + `scripts/test-workflows.ts` (9 live,
+  against a real model), whose NEGATIVE CONTROL hashes the steps above the
+  notes heading before and after the assistant records a lesson and requires
+  them identical.
+- **The artifact panel** (`components/chat/artifact-panel.tsx` +
+  `lib/artifact.ts` + `api/files/[id]/preview`) — a file the assistant made,
+  open on the right beside the chat. Click a file card, or let a turn that
+  presents something open it at its latest version. Markdown, code, text, HTML
+  and PDF, with Download / Expand / Close; under `md` it is the whole screen
+  with a cross, because a 400px reading panel on a phone is neither the chat
+  nor the document.
+  **Never images** — they render inline in the reply, where an image IS the
+  answer rather than an attachment to it, so a side panel would put the same
+  picture in two places, one of them worse. `previewKind` enforces that by mime
+  AND by name.
+  **The preview is a separate ROUTE from the download, not a flag on it.**
+  Download's `Content-Disposition: attachment` is precisely what stops a stored
+  body ever rendering on this origin; preview relaxes that, so it re-earns the
+  safety itself — refusing anything not previewable, refusing textual files
+  over 2 MB, serving the type we DECIDED rather than the stored one, and
+  keeping `CSP: sandbox` so an HTML artifact renders in a unique origin with
+  scripts disabled. Without that last header, serving `text/html` inline from
+  our own origin is stored XSS wearing a preview panel as a disguise.
+  The URL carries the file's mtime read from DISK, which is what makes "it
+  updates almost instantly" true: the browser caches an in-page fetch by URL
+  alone, so a re-presented file under the same id would otherwise keep showing
+  the old bytes (the bug already fixed once for re-presented images).
+  Framed previews render at a fixed 1200px and SCALE to fit — a design artifact
+  is built at an exact size, and the frame is sandboxed into a unique origin so
+  its real width cannot be measured from here.
+  Proof: `artifact.test.ts` (17) + `scripts/test-artifact-panel.ts` (15 live
+  browser checks, no model calls).
 - **Completion chime** (§13, `chime.ts`): a synthesised two-note Web-Audio ding plays
   when a reply finishes while the tab is hidden/unfocused (`isTabInactive()`).
 - **Paced word reveal** (§15): the SSE stream (Anthropic lands in big multi-word
@@ -2542,6 +2636,25 @@ login screen). The assistant's own name + logo are separate (assistant config).
   stay COPYed in the Dockerfile** (it is, line ~92): the worker is served from
   there and the default icon is READ from there, so losing that line 404s the
   worker and 500s every icon — in production only, like CHANGELOG.md.
+- **An inline `width` beats `inset-0`, and that is how a panel gets opened but
+  not closed** (2026-09-15, the artifact panel). It is `fixed inset-0` on a
+  phone and a fixed width from `md` up, and that width was an inline style —
+  which wins over the right edge `inset-0` sets. On a 390px screen the panel
+  laid out 480px wide and pushed Download, Expand and Close off the side, so it
+  could be opened and not shut. Every class name read correctly; only MEASURING
+  it at phone width found it. The width rides a CSS variable now
+  (`md:w-[var(--oi-artifact-w)]`), and `test-artifact-panel.ts` asserts the
+  close cross's bounding box is actually on screen. Any future panel that is
+  full-bleed on mobile and sized on desktop needs the same treatment.
+- **A file's stored mime type is `application/octet-stream` for everything the
+  Sandbox writes**, so anything deciding what a file IS must fall back to its
+  NAME (see `previewKind`). That cuts both ways: it is why a generated
+  `report.md` can be previewed at all, and why "never preview an image" has to
+  be checked against the name as well as the type. `files` also has no
+  `updated_at` column at all, and its `size_bytes` LAGS a rewrite —
+  `present_files` fires mid-run while `syncPool` only re-syncs the row once the
+  agent finishes — so anything needing a current size or version reads the disk
+  (`statStoredFile`), the same reason generated images stamp mtime.
 - **`localhost:3000` is not necessarily THIS project** (2026-09-09). A harness
   pointed at it spent a debugging round on a `/login` that redirected to
   `/setup`, because the port was serving a DIFFERENT checkout (`OPNmesh`)
