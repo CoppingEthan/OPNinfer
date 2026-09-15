@@ -187,6 +187,17 @@ const TABLES: TableIO[] = [
     del: async (tx) => void (await tx.setting.deleteMany({})),
   },
   {
+    // Folders: before conversations and conversation_members, both of which
+    // carry a folder_id pointing here.
+    name: "folders",
+    special: {},
+    read: () => db.folder.findMany() as unknown as Promise<Row[]>,
+    create: async (tx, rows) => {
+      await tx.folder.createMany({ data: rows as Prisma.FolderCreateManyInput[] });
+    },
+    del: async (tx) => void (await tx.folder.deleteMany({})),
+  },
+  {
     name: "conversations",
     special: {},
     read: () => db.conversation.findMany() as unknown as Promise<Row[]>,
@@ -268,6 +279,28 @@ const TABLES: TableIO[] = [
       });
     },
     del: async (tx) => void (await tx.messageFeedback.deleteMany({})),
+  },
+  {
+    // Workflows and who they are shared with. After users; nothing else
+    // depends on them.
+    name: "workflows",
+    special: {},
+    read: () => db.workflow.findMany() as unknown as Promise<Row[]>,
+    create: async (tx, rows) => {
+      await tx.workflow.createMany({ data: rows as Prisma.WorkflowCreateManyInput[] });
+    },
+    del: async (tx) => void (await tx.workflow.deleteMany({})),
+  },
+  {
+    name: "workflow_members",
+    special: {},
+    read: () => db.workflowMember.findMany() as unknown as Promise<Row[]>,
+    create: async (tx, rows) => {
+      await tx.workflowMember.createMany({
+        data: rows as Prisma.WorkflowMemberCreateManyInput[],
+      });
+    },
+    del: async (tx) => void (await tx.workflowMember.deleteMany({})),
   },
   {
     // The Sandbox agent's install/download tally (Admin → Tools). Plain

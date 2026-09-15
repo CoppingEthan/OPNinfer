@@ -23,6 +23,14 @@ import {
 import { VIEW_IMAGE_DEF, executeViewImage } from "./view-image";
 import { LOAD_SKILL_DEF, executeLoadSkill } from "./skills";
 import {
+  LOAD_WORKFLOW_DEF,
+  NOTE_WORKFLOW_DEF,
+  SAVE_WORKFLOW_DEF,
+  executeLoadWorkflow,
+  executeNoteWorkflow,
+  executeSaveWorkflow,
+} from "./workflows";
+import {
   IMAGE_GENERATION_DEF,
   IMAGE_EDIT_DEF,
   IMAGE_BLEND_DEF,
@@ -105,6 +113,13 @@ registerTool({ def: IMAGE_BLEND_DEF, group: "image", execute: executeImageBlend 
 // Skills — progressive disclosure: L1 list rides the system prompt, the full
 // body loads on demand (assets staged into the pool, non-overwriting).
 registerTool({ def: LOAD_SKILL_DEF, group: "skills", execute: executeLoadSkill });
+
+// Workflows — the user's OWN playbooks, same L1/L2 shape as skills. The three
+// tools are deliberately split so that "what I learned" (note) can never take
+// the path that rewrites "what you told me to do" (save).
+registerTool({ def: LOAD_WORKFLOW_DEF, group: "workflows", execute: executeLoadWorkflow });
+registerTool({ def: NOTE_WORKFLOW_DEF, group: "workflows", execute: executeNoteWorkflow });
+registerTool({ def: SAVE_WORKFLOW_DEF, group: "workflows", execute: executeSaveWorkflow });
 
 // Visualisation: NO tool since 2026-07-13 — the marker protocol is taught by
 // a system block (tools/visualize.ts VIZ_PROTOCOL_BLOCK, injected by the chat

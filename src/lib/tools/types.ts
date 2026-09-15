@@ -30,6 +30,7 @@ export const TOOL_GROUPS = [
   "skills",
   "visualize",
   "ask", // pause and ask the user a multiple-choice question
+  "workflows", // the person's own saved playbooks (load/note/save)
   "capability", // client-specific capabilities (instance-enabled)
 ] as const;
 

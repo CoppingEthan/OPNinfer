@@ -13,6 +13,8 @@ import { orderThreadRows } from "@/lib/thread-order";
 import { compactConversation, compactedHistory, loadCompaction, replayedTokens } from "@/lib/compaction";
 import { getCachedTokenLimits } from "@/lib/limits";
 import { buildSkillsBlock } from "@/lib/tools/skills";
+import { buildWorkflowsBlock } from "@/lib/workflows";
+import { workflowSummaries } from "@/lib/workflow-store";
 import { estimateImageMs } from "@/lib/tools/images";
 import { VizStreamParser, type VizEvent } from "@/lib/viz-stream";
 import { VIZ_PROTOCOL_BLOCK } from "@/lib/tools/visualize";
@@ -599,10 +601,15 @@ export async function startChatTurn(input: TurnInput): Promise<TurnStartResult> 
       // Memory: the user's persistent memory block rides along too (never in
       // incognito, never in a shared chat). Built AFTER the ingestion wait so
       // the manifest inlines the freshly prepared content (e.g. the transcript).
-      const [fileManifest, memoryBlock, skillsBlock, turnImages, memoryPaused] = await Promise.all([
+      const [fileManifest, memoryBlock, skillsBlock, workflowsBlock, turnImages, memoryPaused] =
+        await Promise.all([
         buildFileManifest(newConversationId),
         useMemory ? buildMemoryBlock(userId) : Promise.resolve(null),
         buildSkillsBlock(),
+        // Workflows: the person's OWN playbooks, same L1/L2 shape as skills —
+        // names and one-line descriptions every turn, bodies on demand. Null
+        // when they have none, so nobody pays for a feature they don't use.
+        workflowSummaries(userId).then(buildWorkflowsBlock),
         regenerate
           ? Promise.resolve([])
           : loadImagesForTurn(newConversationId, input.fileIds),
@@ -653,6 +660,9 @@ export async function startChatTurn(input: TurnInput): Promise<TurnStartResult> 
         { role: "system" as const, content: buildAssistantSystemBlock(config) },
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock }] : []),
         ...(skillsBlock ? [{ role: "system" as const, content: skillsBlock }] : []),
+        ...(workflowsBlock && !toolset.disabledGroups.includes("workflows")
+          ? [{ role: "system" as const, content: workflowsBlock }]
+          : []),
         ...(fileManifest ? [{ role: "system" as const, content: fileManifest }] : []),
         // v0.5: in a shared chat the model should know it is talking to
         // several people, and address them by name when it matters.

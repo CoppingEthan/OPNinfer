@@ -56,37 +56,37 @@ enum FileKind {
 // ---------------------------------------------------------------------------
 
 model User {
-  id            String    @id @default(uuid()) @db.Uuid
-  email         String    @unique
-  name          String? // optional display name (admin-editable)
-  passwordHash  String    @map("password_hash")
-  role          Role      @default(user)
-  emailVerified DateTime? @map("email_verified")
-  disabled      Boolean   @default(false)
-  image         String? // profile-picture asset name (served at /api/avatar/<name>)
-  createdAt     DateTime  @default(now()) @map("created_at")
-  lastActiveAt  DateTime? @map("last_active_at") // bumped on chat activity
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String    @unique
+  name               String? // optional display name (admin-editable)
+  passwordHash       String    @map("password_hash")
+  role               Role      @default(user)
+  emailVerified      DateTime? @map("email_verified")
+  disabled           Boolean   @default(false)
+  image              String? // profile-picture asset name (served at /api/avatar/<name>)
+  createdAt          DateTime  @default(now()) @map("created_at")
+  lastActiveAt       DateTime? @map("last_active_at") // bumped on chat activity
   // Release notes this user has seen (What's new panel). NULL = never seen,
   // so every pre-existing account gets the panel once — which is how people
   // discover it exists. Stored per user, not in the browser: reading the notes
   // on a laptop must not re-show them on a phone.
-  lastSeenVersion String? @map("last_seen_version")
+  lastSeenVersion    String?   @map("last_seen_version")
   // Memory v2 (0.5.1): "pause" keeps what the assistant knows and stops it
   // learning anything new — the idle-chat pass skips this person and the
   // remember tool is withheld. Reset is deleting the topic rows.
-  memoryPaused Boolean @default(false) @map("memory_paused")
+  memoryPaused       Boolean   @default(false) @map("memory_paused")
   // When the password last changed (audit 2026-09-05). Carried in the session
   // token at sign-in and compared on the 60-second recheck, so a reset — the
   // natural response to a stolen session — ends every session issued before
   // it instead of leaving the thief signed in for the token's 7 days.
-  passwordChangedAt DateTime? @map("password_changed_at")
+  passwordChangedAt  DateTime? @map("password_changed_at")
   // An admin set this password FOR them (2026-09-07): they can sign in with
   // it, and then can do nothing else until they choose their own. Set by the
   // admin password actions, cleared the moment the person changes it.
   // Exists because emailed reset links are being delivered and then blocked
   // at the recipient's end, so the operator hands the password over by
   // another route — and a password someone else knows must not stay live.
-  mustChangePassword Boolean @default(false) @map("must_change_password")
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
   // The last time this password actually WORKED (2026-09-09). Distinct from
   // `lastActiveAt`, which the OWUI importer carries across from the old
   // system — so on a migrated portal that column cannot tell "signed in
@@ -95,20 +95,23 @@ model User {
   // has never been used since it arrived. That is what lets a failed sign-in
   // safely offer a temporary password: an account whose password has never
   // worked has nothing to lose by being given a new one.
-  lastSignInAt DateTime? @map("last_sign_in_at")
+  lastSignInAt       DateTime? @map("last_sign_in_at")
 
-  credentials        ProviderCredential[]
-  usageRecords       UsageRecord[]
-  conversations      Conversation[]
-  files              File[]
+  credentials         ProviderCredential[]
+  usageRecords        UsageRecord[]
+  conversations       Conversation[]
+  folders             Folder[]
+  workflows           Workflow[]
+  workflowMemberships WorkflowMember[]
+  files               File[]
   passwordResetTokens PasswordResetToken[]
-  invitesSent        Invite[]             @relation("InviteInviter")
-  memoryTopics       UserMemoryTopic[]
-  feedback           MessageFeedback[]
+  invitesSent         Invite[]             @relation("InviteInviter")
+  memoryTopics        UserMemoryTopic[]
+  feedback            MessageFeedback[]
   // Shared chats (v0.5): chats this person has been added to, and the
   // messages they wrote (authorship survives the account: SET NULL).
-  memberships        ConversationMember[]
-  authored           Message[]
+  memberships         ConversationMember[]
+  authored            Message[]
 
   @@map("users")
 }
@@ -241,32 +244,32 @@ model ProviderCredential {
 // Billing/analytics. user_id uses SET NULL so historical records survive
 // account deletion (anonymised). Never cascade-deleted on chat delete.
 model UsageRecord {
-  id           String   @id @default(uuid()) @db.Uuid
-  userId       String?  @map("user_id") @db.Uuid
-  provider     String
-  model        String
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String?  @map("user_id") @db.Uuid
+  provider         String
+  model            String
   // Which assistant role made the call: frontend | conversation | escalation |
   // failover. Null for pre-v0.2 records.
-  role         String?
+  role             String?
   // `input_tokens` is the FULL-PRICE (uncached) input. Cached tokens are
   // tracked separately because providers price them differently and report
   // them on different conventions (normalized in the provider layer).
-  inputTokens      Int    @map("input_tokens")
-  outputTokens     Int    @map("output_tokens")
-  cacheReadTokens  Int    @default(0) @map("cache_read_tokens")
-  cacheWriteTokens Int    @default(0) @map("cache_write_tokens")
-  costEstimate Decimal  @map("cost_estimate") @db.Decimal(10, 6) // USD at log time
+  inputTokens      Int      @map("input_tokens")
+  outputTokens     Int      @map("output_tokens")
+  cacheReadTokens  Int      @default(0) @map("cache_read_tokens")
+  cacheWriteTokens Int      @default(0) @map("cache_write_tokens")
+  costEstimate     Decimal  @map("cost_estimate") @db.Decimal(10, 6) // USD at log time
   // Who paid (v0.4): "api" — the org's key, cost_estimate is real money;
   // "subscription" — the operator's Claude plan, cost_estimate is 0 and
   // notional_cost holds what those tokens WOULD have cost at API rates.
   // Lets one table hold both without a $0.00 row dragging the average
   // cost-per-request down, and shows the plan's value as "saved".
-  billingSource String   @default("api") @map("billing_source")
-  notionalCost  Decimal? @map("notional_cost") @db.Decimal(10, 6)
+  billingSource    String   @default("api") @map("billing_source")
+  notionalCost     Decimal? @map("notional_cost") @db.Decimal(10, 6)
   // Sandbox agent runs: which agent session the call belonged to.
-  agentSessionId String? @map("agent_session_id")
-  requestId    String?  @map("request_id")
-  createdAt    DateTime @default(now()) @map("created_at")
+  agentSessionId   String?  @map("agent_session_id")
+  requestId        String?  @map("request_id")
+  createdAt        DateTime @default(now()) @map("created_at")
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
@@ -320,33 +323,39 @@ model Setting {
 // ---------------------------------------------------------------------------
 
 model Conversation {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @map("user_id") @db.Uuid
-  title     String
-  pinned    Boolean  @default(false)
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @map("user_id") @db.Uuid
+  title          String
+  pinned         Boolean   @default(false)
   // Incognito chats are auto-deleted when the user leaves them or closes the
   // browser (spec: incognito). Billing/audit logs survive as with any delete.
-  incognito Boolean  @default(false)
+  incognito      Boolean   @default(false)
   // Sandbox (agent tier): the Agent SDK session this chat's agent runs resume
   // by default, so the agent keeps its own transcript across follow-ups —
   // "change the colour theme to blue" edits the SAME adverts it made, rather
   // than reverse-engineering them. Null until the first run; a `fresh` run
   // replaces it.
-  agentSessionId String? @map("agent_session_id")
+  agentSessionId String?   @map("agent_session_id")
   // Memory v2 (0.5.1): when the idle-chat memory pass last read this chat. The
   // scheduler picks chats whose newest message is 30+ minutes old AND newer
   // than this stamp, so each stretch of conversation is read exactly once.
-  memoryPassAt DateTime? @map("memory_pass_at")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  memoryPassAt   DateTime? @map("memory_pass_at")
+  // Folders: the OWNER's filing. Per person, exactly like `pinned` above —
+  // a member files the same chat on their membership row instead, so tidying
+  // a shared chat never rearranges anyone else's sidebar. SET NULL on folder
+  // delete: removing a folder must never take chats with it.
+  folderId       String?   @map("folder_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages Message[]
-  files    File[]
+  user        User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder      Folder?                  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  messages    Message[]
+  files       File[]
   // Shared chats (v0.5): everyone in the chat once it has been shared — the
   // owner included, for their per-person state. `userId` above stays the
   // owner; no rows = a private chat.
-  members  ConversationMember[]
+  members     ConversationMember[]
   // Conversation compaction (2026-09-10): rolling summaries of the older
   // part of a long chat, newest wins. See src/lib/compaction.ts.
   compactions ConversationCompaction[]
@@ -428,11 +437,14 @@ model ConversationMember {
   userId         String    @map("user_id") @db.Uuid
   invitedById    String?   @map("invited_by_id") @db.Uuid
   pinned         Boolean   @default(false)
+  /// This member's own filing of a shared chat — see Conversation.folderId.
+  folderId       String?   @map("folder_id") @db.Uuid
   lastReadAt     DateTime? @map("last_read_at")
   createdAt      DateTime  @default(now()) @map("created_at")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder       Folder?      @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@unique([conversationId, userId])
   @@index([userId])
@@ -440,13 +452,13 @@ model ConversationMember {
 }
 
 model File {
-  id             String   @id @default(uuid()) @db.Uuid
-  userId         String   @map("user_id") @db.Uuid
-  conversationId String?  @map("conversation_id") @db.Uuid
+  id             String  @id @default(uuid()) @db.Uuid
+  userId         String  @map("user_id") @db.Uuid
+  conversationId String? @map("conversation_id") @db.Uuid
   filename       String // original filename
-  mimeType       String   @map("mime_type") // client-declared MIME (untrusted)
-  sizeBytes      BigInt   @map("size_bytes")
-  storagePath    String   @map("storage_path") // relative path under storage root
+  mimeType       String  @map("mime_type") // client-declared MIME (untrusted)
+  sizeBytes      BigInt  @map("size_bytes")
+  storagePath    String  @map("storage_path") // relative path under storage root
 
   // --- Ingestion pipeline (worker-managed) ---------------------------------
   kind           FileKind   @default(upload)
@@ -478,4 +490,77 @@ model File {
   @@index([conversationId])
   @@index([status]) // worker queue poll
   @@map("files")
+}
+
+/// A person's own folder for grouping chats. Private to them: two people in a
+/// shared chat can file it differently, or not at all. Deleting a folder is a
+/// tidying action, never a destructive one — every chat in it simply returns
+/// to the date-grouped list.
+model Folder {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  name      String
+  /// Hand-ordered in the sidebar; ties fall back to name.
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  memberships   ConversationMember[]
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("folders")
+}
+
+/// A workflow is a person's own playbook: a markdown document describing how
+/// they want a recurring job done ("take a document and rewrite it in our
+/// tone"). Deliberately the same shape as a SKILL — name + one-line
+/// description ride every turn, the body is loaded on demand — except that a
+/// skill ships with the product and a workflow belongs to a user, who can
+/// edit it by hand and share it.
+///
+/// The assistant may append to it (what it learned last time) but the steps
+/// stay the user's: see `note_workflow` vs `save_workflow` in
+/// src/lib/tools/workflows.ts for why those are two tools and not one.
+model Workflow {
+  id          String    @id @default(uuid()) @db.Uuid
+  /// The owner. Sharing adds member rows; there is only ever ONE copy, so an
+  /// edit by anyone with access is seen by everyone — that is the point.
+  userId      String    @map("user_id") @db.Uuid
+  name        String
+  description String
+  body        String
+  /// When the assistant last LOADED it, for "used 3 days ago" in the list.
+  lastUsedAt  DateTime? @map("last_used_at")
+  /// When the assistant last APPENDED a note, so the panel can point at what
+  /// changed without the person having to diff it themselves.
+  notedAt     DateTime? @map("noted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  members WorkflowMember[]
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@map("workflows")
+}
+
+/// A person a workflow is shared with — the owner INCLUDED once shared, so
+/// "shared" is simply "has rows", exactly as with conversation_members.
+model WorkflowMember {
+  id          String   @id @default(uuid()) @db.Uuid
+  workflowId  String   @map("workflow_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  invitedById String?  @map("invited_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, userId])
+  @@index([userId])
+  @@map("workflow_members")
 }

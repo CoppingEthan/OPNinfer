@@ -55,6 +55,11 @@ const GROUP_LABELS: { id: string; label: string; blurb: string }[] = [
     label: "Clarifying questions",
     blurb: "pause a reply to ask the user a multiple-choice question",
   },
+  {
+    id: "workflows",
+    label: "Workflows",
+    blurb: "let people save their own playbooks, and the assistant follow them",
+  },
   { id: "capability", label: "Client capabilities", blurb: "the client-specific tools configured below" },
 ];
 
