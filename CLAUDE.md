@@ -118,7 +118,12 @@ evolves. **Never put secrets here** (API keys live in `.env`, which is git-ignor
   follow-up messages, and fade-in streaming.
 - Providers: **OpenAI**, **Anthropic** (Console API key only — subscription OAuth
   was removed, see *Provider abstraction*), **Google Gemini**.
-- **Version 0.6.2** (2026-09-14 — **installable on a phone**: a per-instance
+- **Version 0.7.0** (2026-09-15 — **folders, workflows and the artifact panel**:
+  chats grouped in the sidebar; a person's own markdown playbooks that the
+  assistant loads, follows and annotates, shareable one-copy; and a preview
+  panel beside the chat that renders Office files with their real layout and
+  PDFs with our own renderer. See *Chat workspace*). Before it, **0.6.2**
+  (2026-09-14 — **installable on a phone**: a per-instance
   web manifest, icons rendered from the admin's logo, and a service worker that
   deliberately caches nothing; see *Chat workspace → Installable on a phone*).
   Before it, **0.6.1** (2026-09-10 — the Sandbox's five-minute cut-off; see the

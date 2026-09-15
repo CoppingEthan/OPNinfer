@@ -100,6 +100,16 @@ credentials.
   assistant itself once a chat has been quiet, plus search across your own past
   chats. Readable, editable and pausable in Settings; sensitive matters are never
   kept unless you ask
+- **Folders and workflows** — group chats into folders, and keep your own
+  markdown playbooks for jobs you repeat: name plus a one-line description ride
+  every turn, the assistant opens the full thing when a request matches, and
+  records what it learns under a heading of its own. Shareable, one copy, edits
+  synced.
+- **Documents beside the chat** — an artifact panel that previews what the
+  assistant made: Word, Excel and PowerPoint with their real layout (converted
+  by the same LibreOffice engine the ingestion pipeline uses), PDFs rendered
+  in-app rather than handed to the browser, delimited files as tables, plus
+  markdown, code, HTML and SVG.
 - **Shared chats** — work in one chat with colleagues: the same reply streams to
   everyone at once, every message shows who wrote it, and anyone can send,
   attach, answer or queue a message for when the reply finishes

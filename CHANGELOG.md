@@ -28,6 +28,16 @@ Four rules for writing these, because they are read by CLIENTS, not by us:
    which feature was broken. (Owner rule, 2026-09-07, after 0.5.2's notes
    listed a whole audit's findings.)
 
+## 0.7.0 — 2026-09-15
+
+- **Folders** — group your chats into folders in the sidebar.
+- **Workflows** — write down how you like a job done once, and the assistant
+  follows it. Pick one for a single message from the + button.
+- **Preview files beside the chat** — open a document on the right, laid out the
+  way Word, Excel or PowerPoint would show it. Spreadsheets appear as tables,
+  and a file updates in place as the assistant changes it.
+- General security, feature and UX updates.
+
 ## 0.6.2 — 2026-09-14
 
 - **Add it to your phone** — the assistant installs to your home screen with its
