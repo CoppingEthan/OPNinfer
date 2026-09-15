@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getArtifactMeta, type ArtifactMeta } from "@/app/actions/artifact";
@@ -53,6 +54,15 @@ const MAX_WIDTH = 900;
 
 export function ArtifactPanel() {
   const [fileId, setFileId] = useState<string | null>(null);
+  /**
+   * The screen the open document belongs to.
+   *
+   * The panel lives in the chat SHELL, so it survives navigation between
+   * chats — which left one conversation's document sitting beside an
+   * unrelated one, with no way to tell that is what you were looking at.
+   */
+  const openedOn = useRef<string | null>(null);
+  const pathname = usePathname();
   const [meta, setMeta] = useState<ArtifactMeta | null>(null);
   const [body, setBody] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,11 +88,30 @@ export function ArtifactPanel() {
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<{ fileId: string }>).detail?.fileId;
-      if (id) setFileId(id);
+      if (id) {
+        // Read from the address bar rather than a captured value: this
+        // listener is registered once and would otherwise close over the
+        // pathname it was created with.
+        openedOn.current = window.location.pathname;
+        setFileId(id);
+      }
     };
     window.addEventListener(ARTIFACT_EVENT, onOpen);
     return () => window.removeEventListener(ARTIFACT_EVENT, onOpen);
   }, []);
+
+  // Leaving the conversation closes the document with it. Deliberately no
+  // exit animation: the screen underneath is changing anyway, and a panel
+  // sliding out over a page that has already moved on reads as a glitch.
+  useEffect(() => {
+    if (!fileId || !openedOn.current || openedOn.current === pathname) return;
+    openedOn.current = null;
+    setFileId(null);
+    setMeta(null);
+    setBody(null);
+    setError(null);
+    setClosing(false);
+  }, [pathname, fileId]);
 
   /** Re-read metadata and, for a textual kind, the body. */
   const load = useCallback(async (id: string) => {
@@ -183,6 +212,7 @@ export function ArtifactPanel() {
     // Slide out first, THEN unmount — otherwise the exit animation has nothing
     // to play on. The timeout matches .oi-artifact-out.
     setClosing(true);
+    openedOn.current = null;
     setTimeout(() => {
       setFileId(null);
       setMeta(null);

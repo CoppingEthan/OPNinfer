@@ -1088,6 +1088,14 @@ match. Collapsed → an icon rail (logo, new chat, search, admin, avatar).
   nothing to duplicate.
   The panel SLIDES in (owner ask) — see the keyframe gotcha, which is why it
   is an animation and not a transition.
+  **Leaving the conversation closes the document** (owner, 2026-09-15). The
+  panel is mounted in the chat SHELL so that it survives a re-render, which
+  also means it survives NAVIGATION — one chat's file sat open beside an
+  unrelated conversation with nothing to say it did not belong there. It now
+  remembers the path it was opened on and clears when that changes, with no
+  exit animation (the screen underneath has already moved on). The regression
+  must use a real in-app navigation: `page.goto` is a full reload, which
+  unmounts everything and would pass with or without the fix.
   **Presented files show on EVERY message that names them** (owner bug,
   2026-09-15: "presented files disappear from the chat… they were there
   before"). `attachFilesToMessages` let the first message to mention a file

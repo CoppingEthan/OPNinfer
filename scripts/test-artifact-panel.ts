@@ -524,6 +524,33 @@ async function main() {
       );
     }
 
+    // ---- 2c. leaving the chat closes the document ------------------------
+    // The panel lives in the chat SHELL, so it survives navigation: without
+    // this it stayed open over an unrelated conversation, still showing the
+    // previous chat's file. It has to be driven by a REAL in-app navigation —
+    // page.goto() is a full reload, which unmounts everything and would pass
+    // whether the fix exists or not.
+    await openIt(doc.id, "handover.md");
+    check("a document is open before navigating", (await panel(page).count()) === 1);
+
+    await page.getByRole("link", { name: /new chat/i }).first().click();
+    await page.waitForFunction("location.pathname !== '/chat/' + document.title", undefined, {
+      timeout: 15_000,
+    }).catch(() => {});
+    await page.waitForTimeout(1200);
+    check(
+      "…and leaving the conversation closes it",
+      (await panel(page).count()) === 0,
+      `now at ${new URL(page.url()).pathname}`,
+    );
+
+    // Back to the chat, with something open again — the next section closes it
+    // by hand, and this one has just proved the panel does not survive a move.
+    await page.goto(`${BASE}/chat/${convo.id}`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector("[data-chat-scroll]", { timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    await openIt(doc.id, "handover.md");
+
     // ---- 3. close, then the phone ---------------------------------------
     await panel(page).getByLabel("Close").click();
     await page.waitForTimeout(500);
