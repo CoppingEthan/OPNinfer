@@ -222,6 +222,7 @@ export function Sidebar({
       <nav className="flex h-full flex-col items-center gap-1 px-2 pt-2">
         <RailButton href="/chat" label="New chat" icon={<ComposeIcon />} anim="oi-icon-nudge" />
         <RailButton label="Search" icon={<SearchIcon />} anim="oi-icon-pop" onClick={() => setSearchOpen(true)} />
+        <RailButton href="/workflows" label="Workflows" icon={<WorkflowIcon />} anim="oi-icon-pop" />
         {isAdmin ? (
           <RailButton href="/admin" label="Admin" icon={<AdminIcon />} anim="oi-icon-pop" />
         ) : null}
@@ -234,6 +235,7 @@ export function Sidebar({
     <nav className="flex h-full flex-col px-2 pt-2">
       <NavRow href="/chat" icon={<ComposeIcon />} anim="oi-icon-nudge" label="New chat" />
       <NavRow icon={<SearchIcon />} anim="oi-icon-pop" label="Search" onClick={() => setSearchOpen(true)} />
+      <NavRow href="/workflows" icon={<WorkflowIcon />} anim="oi-icon-pop" label="Workflows" />
       {isAdmin ? (
         <NavRow href="/admin" icon={<AdminIcon />} anim="oi-icon-pop" label="Admin" />
       ) : null}
@@ -634,6 +636,17 @@ function ConversationRow({
         </>
       )}
     </li>
+  );
+}
+
+/** Workflows: a small checklist — a saved way of doing a thing. */
+function WorkflowIcon() {
+  return (
+    <svg viewBox="0 0 20 20" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path className="oi-icon-a" d="M3.2 5.4 4.4 6.6 6.8 4.2" />
+      <path className="oi-icon-b" d="M3.2 10.4 4.4 11.6 6.8 9.2" />
+      <path d="M3.4 15.8h3.4M9.6 5.2h7.2M9.6 10.4h7.2M9.6 15.8h7.2" />
+    </svg>
   );
 }
 
