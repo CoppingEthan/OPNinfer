@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { BrandLogo } from "@/components/branding";
 import { Sidebar, type ConversationItem } from "./sidebar";
 import type { FolderItem } from "./folders-ui";
+import { ArtifactPanel } from "./artifact-panel";
 import { Avatar } from "./avatar";
 import { UserMenu } from "./user-menu";
 import { WhatsNew } from "./whats-new";
@@ -156,6 +157,12 @@ export function ChatShell({
           </header>
           <main className="min-h-0 flex-1">{children}</main>
         </div>
+
+        {/* Artifact preview — a file the assistant produced, open beside the
+            conversation. Mounted at the shell so it survives moving between
+            chats, and so the chat column simply narrows rather than being
+            covered up. Renders nothing until something asks it to open. */}
+        <ArtifactPanel />
 
         {/* Release notes — mounted once here so it survives navigation between
             chats and can only ever pop itself open a single time. */}

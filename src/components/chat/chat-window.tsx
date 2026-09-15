@@ -26,6 +26,8 @@ import { playCompletionChime, isTabInactive } from "./chime";
 import { uid } from "@/lib/uid";
 import { APP_NAME, APP_VERSION, pageTitle } from "@/lib/version";
 import { WELCOME_MESSAGES, formatWelcome } from "@/lib/welcome";
+import { openArtifact } from "./artifact-panel";
+import { previewKind } from "@/lib/artifact";
 
 /** Characters of live console output held per run block (the UI shows 5 lines;
  *  the full output is capped and persisted server-side). */
@@ -871,6 +873,21 @@ export function ChatWindow({
                     : m,
                 ),
               );
+              // Open the newest previewable one beside the chat, at its latest
+              // version. Images are skipped on purpose — they render inline in
+              // the reply, where they are the answer rather than an attachment
+              // to it — so a turn that only presents pictures opens nothing.
+              {
+                const presented = (evt.files ?? []) as {
+                  id: string;
+                  filename: string;
+                  mimeType?: string | null;
+                }[];
+                const openable = presented.find(
+                  (f) => previewKind(f.mimeType, f.filename) !== "none",
+                );
+                if (openable) openArtifact(openable.id);
+              }
             } else if (evt.type === "image_start") {
               // Show the aspect-ratio placeholder box immediately.
               setMessages((prev) =>

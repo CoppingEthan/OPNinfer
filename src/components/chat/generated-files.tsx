@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { FileContextModal, type Attachment } from "./file-chip";
 import { fileCardInfo, type FileCategory } from "@/lib/file-card";
+import { openArtifact } from "./artifact-panel";
 
 /**
  * Files the assistant CREATED and presented, as Claude.ai-style cards (owner
@@ -35,7 +36,16 @@ export function GeneratedFiles({ files }: { files: Attachment[] }) {
   return (
     <div className="mt-2 flex max-w-[34rem] flex-col gap-2">
       {files.map((f, i) => (
-        <FileCard key={f.id} file={f} index={i} onView={() => setOpen(f)} />
+        <FileCard
+          key={f.id}
+          file={f}
+          index={i}
+          // Clicking the card opens it in the side panel, beside the chat.
+          // The kebab's "View contents" keeps the old modal, which shows the
+          // PREPARED text the model was given — a different question.
+          onView={() => openArtifact(f.id)}
+          onViewContext={() => setOpen(f)}
+        />
       ))}
 
       {files.length > 1 ? (
@@ -57,7 +67,17 @@ export function GeneratedFiles({ files }: { files: Attachment[] }) {
   );
 }
 
-function FileCard({ file, index, onView }: { file: Attachment; index: number; onView: () => void }) {
+function FileCard({
+  file,
+  index,
+  onView,
+  onViewContext,
+}: {
+  file: Attachment;
+  index: number;
+  onView: () => void;
+  onViewContext: () => void;
+}) {
   const info = fileCardInfo(file.filename, file.mimeType);
   const ready = file.status !== "pending" && file.status !== "processing";
   const [menu, setMenu] = useState(false);
@@ -134,7 +154,7 @@ function FileCard({ file, index, onView }: { file: Attachment; index: number; on
               Open in new tab
             </a>
             {ready ? (
-              <button role="menuitem" type="button" onClick={() => { setMenu(false); onView(); }} className="block w-full px-3 py-1.5 text-left text-foreground hover:bg-surface-hover">
+              <button role="menuitem" type="button" onClick={() => { setMenu(false); onViewContext(); }} className="block w-full px-3 py-1.5 text-left text-foreground hover:bg-surface-hover">
                 View contents
               </button>
             ) : null}

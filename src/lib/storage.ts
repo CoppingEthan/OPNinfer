@@ -394,6 +394,24 @@ export async function resolveStoredPathForRead(relPath: string): Promise<string>
 }
 
 /** A read stream over a stored file, symlink-safe. Throws when missing. */
+/**
+ * Size and modification time of a stored file, or null if it is not there.
+ *
+ * Goes through the SAME symlink-safe resolver as reading it: a file the
+ * Sandbox replaced with a link must be "missing" here too, or the artifact
+ * panel would happily report the size of whatever the link pointed at.
+ */
+export async function statStoredFile(
+  relPath: string,
+): Promise<{ size: number; mtimeMs: number } | null> {
+  try {
+    const st = await stat(await resolveStoredPathForRead(relPath));
+    return { size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
 export async function readFileStream(relPath: string): Promise<NodeJS.ReadableStream> {
   return createReadStream(await resolveStoredPathForRead(relPath));
 }

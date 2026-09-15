@@ -71,7 +71,9 @@ function escapeHtml(s: string): string {
  * palettes). Highlighting a 5-line tail per streamed delta is trivially
  * cheap, so the LIVE preview is highlighted too — code "types" in colour.
  */
-function CodeView({
+/** Exported so the artifact panel renders code the SAME way the run blocks do
+ *  — one highlighter, one gutter, one set of token colours. */
+export function CodeView({
   code,
   lang,
   startLine = 1,
