@@ -7,6 +7,7 @@ import type { BackupInfo } from "@/lib/backup";
 import { formatBytes, formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FormMessage } from "@/components/ui/form-message";
+import { useDialog } from "@/components/ui/dialog";
 
 interface RestoreSummary {
   appVersion: string;
@@ -17,6 +18,7 @@ interface RestoreSummary {
 }
 
 export function BackupManager({ backups }: { backups: BackupInfo[] }) {
+  const dialog = useDialog();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<{ error?: string; success?: string }>({});
@@ -37,8 +39,16 @@ export function BackupManager({ backups }: { backups: BackupInfo[] }) {
     });
   };
 
-  const onDelete = (name: string) => {
-    if (!confirm(`Delete backup "${name}"? This cannot be undone.`)) return;
+  const onDelete = async (name: string) => {
+    if (
+      !(await dialog.confirm({
+        title: `Delete backup “${name}”?`,
+        body: "This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+      }))
+    )
+      return;
     setMsg({});
     startTransition(async () => {
       const res = await deleteBackup(name);

@@ -2,6 +2,7 @@
 
 import { ThemeProvider } from "next-themes";
 import type { ReactNode } from "react";
+import { DialogProvider } from "@/components/ui/dialog";
 
 /**
  * Client-side providers. next-themes handles light/dark with the system
@@ -15,7 +16,7 @@ export function Providers({ children }: { children: ReactNode }) {
       enableSystem
       disableTransitionOnChange
     >
-      {children}
+      <DialogProvider>{children}</DialogProvider>
     </ThemeProvider>
   );
 }

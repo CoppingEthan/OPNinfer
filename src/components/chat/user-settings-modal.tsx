@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { clearProfileImage } from "@/app/actions/profile";
 import { deleteAllMyChats } from "@/app/actions/conversations";
 import { Avatar } from "./avatar";
+import { useDialog } from "@/components/ui/dialog";
 
 /**
  * Per-user account settings (spec §7/§9/§12): appearance (light/dark for this
@@ -26,6 +27,7 @@ export function UserSettingsModal({
   email: string;
   image?: string | null;
 }) {
+  const dialog = useDialog();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [img, setImg] = useState<string | null>(image ?? null);
@@ -77,8 +79,16 @@ export function UserSettingsModal({
     router.refresh();
   };
 
-  const deleteAll = () => {
-    if (!confirm("Delete ALL of your chats? This can't be undone.")) return;
+  const deleteAll = async () => {
+    if (
+      !(await dialog.confirm({
+        title: "Delete all of your chats?",
+        body: "Every conversation and the files in them. This can't be undone.",
+        confirmLabel: "Delete everything",
+        danger: true,
+      }))
+    )
+      return;
     startDelete(async () => {
       const res = await deleteAllMyChats();
       setDeletedMsg(`Deleted ${res.deleted} chat${res.deleted === 1 ? "" : "s"}.`);
@@ -266,6 +276,7 @@ function ago(iso: string | null): string {
  * refresh from the same response, so edits show instantly.
  */
 function MemorySection({ open }: { open: boolean }) {
+  const dialog = useDialog();
   const [snap, setSnap] = useState<MemorySnapshot | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -334,7 +345,15 @@ function MemorySection({ open }: { open: boolean }) {
   };
 
   const reset = async () => {
-    if (!confirm("Forget everything the assistant knows about you? This can't be undone.")) return;
+    if (
+      !(await dialog.confirm({
+        title: "Forget everything about you?",
+        body: "All four notes are cleared. This can't be undone.",
+        confirmLabel: "Forget it all",
+        danger: true,
+      }))
+    )
+      return;
     setError(null);
     try {
       const res = await fetch("/api/memory", { method: "DELETE" });

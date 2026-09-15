@@ -23,6 +23,7 @@ import { useConversations } from "./conversations-store";
 import { SearchModal } from "./search-modal";
 import { Avatar } from "./avatar";
 import { PEOPLE_EVENT, PeopleIcon } from "./chat-shell";
+import { useDialog } from "@/components/ui/dialog";
 
 export interface ConversationItem {
   id: string;
@@ -102,6 +103,7 @@ export function Sidebar({
   folders?: FolderItem[];
 }) {
   const { conversations, patch, remove } = useConversations();
+  const dialog = useDialog();
   const pathname = usePathname();
   const router = useRouter();
   const activeId = pathname?.startsWith("/chat/")
@@ -178,12 +180,16 @@ export function Sidebar({
     setSelectionMode(false);
     setSelected(new Set());
   };
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     const ids = [...selected];
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} chat${ids.length > 1 ? "s" : ""}? This can't be undone.`)) {
-      return;
-    }
+    const ok = await dialog.confirm({
+      title: `Delete ${ids.length} chat${ids.length > 1 ? "s" : ""}?`,
+      body: "This can't be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     startBulk(async () => {
       remove(ids);
       await deleteConversations(ids);
@@ -279,6 +285,10 @@ export function Sidebar({
           </p>
         ) : null}
 
+        {/* One wrapper, so the folders sit close together as a GROUP rather
+            than each taking the 12px the outer space-y-3 puts between
+            sections. Folders are a list; sections are not. */}
+        <div className="space-y-px">
         {folders.map((f) => (
           <FolderSection
             key={f.id}
@@ -292,8 +302,14 @@ export function Sidebar({
                 await renameFolder(f.id, name);
               });
             }}
-            onDelete={() => {
-              if (!confirm(`Delete the folder "${f.name}"? The chats in it stay.`)) return;
+            onDelete={async () => {
+              const ok = await dialog.confirm({
+                title: `Delete the folder “${f.name}”?`,
+                body: "The chats in it stay — they go back to the date list.",
+                confirmLabel: "Delete folder",
+                danger: true,
+              });
+              if (!ok) return;
               setFolders((prev) => prev.filter((x) => x.id !== f.id));
               for (const c of byFolder.get(f.id) ?? []) patch(c.id, { folderId: null });
               startBulk(async () => {
@@ -308,6 +324,7 @@ export function Sidebar({
             ) : null}
           </FolderSection>
         ))}
+        </div>
 
         {pinned.length > 0 ? (
           <Section title="Starred">
@@ -459,6 +476,7 @@ function ConversationRow({
   onDownload: (id: string, title: string) => void;
 }) {
   const [pending, startTransition] = useTransition();
+  const dialog = useDialog();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(item.title);
   const [aiPending, setAiPending] = useState(false);
@@ -507,8 +525,14 @@ function ConversationRow({
   const busy = pending || aiPending;
 
   // Members leave; only the owner deletes (owner decision 11).
-  const leave = () => {
-    if (!confirm(`Leave "${item.title}"? It will disappear from your list.`)) return;
+  const leave = async () => {
+    const ok = await dialog.confirm({
+      title: `Leave “${item.title}”?`,
+      body: "It disappears from your list. The owner keeps the chat.",
+      confirmLabel: "Leave",
+      danger: true,
+    });
+    if (!ok) return;
     startTransition(async () => {
       onRemoved(item.id);
       await leaveChat(item.id);
@@ -623,13 +647,18 @@ function ConversationRow({
               }}
               onDownload={() => onDownload(item.id, item.title)}
               onSelect={onStartSelection}
-              onDelete={() => {
-                if (confirm(`Delete "${item.title}"? This can't be undone.`)) {
-                  startTransition(async () => {
-                    onRemoved(item.id);
-                    await deleteConversations([item.id]);
-                  });
-                }
+              onDelete={async () => {
+                const ok = await dialog.confirm({
+                  title: `Delete “${item.title}”?`,
+                  body: "This can't be undone.",
+                  confirmLabel: "Delete",
+                  danger: true,
+                });
+                if (!ok) return;
+                startTransition(async () => {
+                  onRemoved(item.id);
+                  await deleteConversations([item.id]);
+                });
               }}
             />
           </div>

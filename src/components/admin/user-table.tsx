@@ -15,6 +15,7 @@ import {
 import { formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { fieldCls } from "./ui";
+import { useDialog } from "@/components/ui/dialog";
 
 export interface AdminUser {
   id: string;
@@ -114,6 +115,7 @@ function UserRow({
   onEdit: () => void;
   onError: (msg: string | null) => void;
 }) {
+  const dialog = useDialog();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [resetMsg, setResetMsg] = useState<{
@@ -173,14 +175,14 @@ function UserRow({
       user.role !== "admin" && {
         label: "Delete",
         danger: true,
-        onClick: () => {
-          if (
-            confirm(
-              `Delete ${user.email}? This removes their chats and can't be undone.`,
-            )
-          ) {
-            run(() => deleteUser(user.id));
-          }
+        onClick: async () => {
+          const ok = await dialog.confirm({
+            title: `Delete ${user.email}?`,
+            body: "This removes their chats and can't be undone. Billing history survives, anonymised.",
+            confirmLabel: "Delete account",
+            danger: true,
+          });
+          if (ok) run(() => deleteUser(user.id));
         },
       },
   ].filter(Boolean) as MenuItem[];

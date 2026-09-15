@@ -124,7 +124,7 @@ export function FolderSection({
           const id = e.dataTransfer.getData("text/x-opninfer-chat");
           if (id) onDropChat(id);
         }}
-        className={`group flex items-center gap-1.5 rounded-xl px-2 py-1.5 transition-colors ${
+        className={`group flex items-center gap-1.5 rounded-xl px-2 py-1 transition-colors ${
           over ? "bg-accent/15 ring-1 ring-accent" : "hover:bg-surface-hover"
         }`}
       >
@@ -183,7 +183,7 @@ export function FolderSection({
           </>
         )}
       </div>
-      {open ? <ul className="mt-0.5 space-y-0.5 pl-3">{children}</ul> : null}
+      {open ? <ul className="mb-1 mt-0.5 space-y-0.5 pl-3">{children}</ul> : null}
     </div>
   );
 }

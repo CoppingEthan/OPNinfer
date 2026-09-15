@@ -8,6 +8,7 @@ import { displayName } from "@/lib/chat-rules";
 import { Avatar } from "./avatar";
 import { useConversations } from "./conversations-store";
 import { useLiveEvents } from "./live-provider";
+import { useDialog } from "@/components/ui/dialog";
 
 /**
  * The People panel (v0.5 shared chats): who is in the chat, who is online,
@@ -26,6 +27,7 @@ export function PeoplePanel({
   me: string;
   onClose: () => void;
 }) {
+  const dialog = useDialog();
   const router = useRouter();
   const { remove } = useConversations();
   const [people, setPeople] = useState<ChatPeople | null>(null);
@@ -101,8 +103,16 @@ export function PeoplePanel({
     });
   };
 
-  const removePerson = (userId: string, name: string) => {
-    if (!confirm(`Remove ${name} from this chat?`)) return;
+  const removePerson = async (userId: string, name: string) => {
+    if (
+      !(await dialog.confirm({
+        title: `Remove ${name}?`,
+        body: "They lose access to this chat straight away.",
+        confirmLabel: "Remove",
+        danger: true,
+      }))
+    )
+      return;
     setError(null);
     startTransition(async () => {
       const res = await unshareChat(conversationId, userId);
@@ -111,8 +121,16 @@ export function PeoplePanel({
     });
   };
 
-  const leave = () => {
-    if (!confirm("Leave this chat? It will disappear from your list.")) return;
+  const leave = async () => {
+    if (
+      !(await dialog.confirm({
+        title: "Leave this chat?",
+        body: "It disappears from your list. The owner keeps it.",
+        confirmLabel: "Leave",
+        danger: true,
+      }))
+    )
+      return;
     startTransition(async () => {
       const res = await leaveChat(conversationId);
       if (res.error) {
