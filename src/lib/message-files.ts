@@ -47,10 +47,25 @@ export function attachFilesToMessages<F extends FileLite>(
   };
 
   // 1. Exact linkage from meta.fileIds (authoritative, order preserved).
+  //
+  // A file may be named by MORE THAN ONE message, and every naming is real:
+  // the person attaches a document and the assistant PRESENTS THE SAME ONE
+  // BACK, so both turns legitimately carry it. Letting the first message to
+  // mention a file claim it exclusively is what made presented files vanish —
+  // they showed while the reply streamed (the `files` SSE event draws them
+  // directly) and were gone on the next load, because by then the loader had
+  // given both ids to the user's turn and left the reply with nothing.
+  // `claimed` decides only whether a file still NEEDS a home, never whether it
+  // is allowed a second one.
   for (const m of messages) {
+    const here = new Set<string>();
     for (const id of m.fileIds ?? []) {
       const f = fileById.get(id);
-      if (f && !claimed.has(id)) push(m.id, f);
+      // Guard the same id listed twice on ONE message — that is a duplicate
+      // card, not a second home.
+      if (!f || here.has(id)) continue;
+      here.add(id);
+      push(m.id, f);
     }
   }
 

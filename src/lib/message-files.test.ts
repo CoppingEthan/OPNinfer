@@ -11,6 +11,45 @@ function file(id: string, kind: string, t: string): FileLite {
 }
 
 describe("attachFilesToMessages", () => {
+  it("shows a file on EVERY message that names it — attached, then presented back", () => {
+    // The owner's report: "presented files disappear from the chat, they were
+    // there before". Both turns name the same two files, because the person
+    // attached them and the assistant presented them back. While the reply
+    // streamed, its cards came from the SSE event and looked right; on reload
+    // the user's turn had claimed both ids and the reply rendered nothing.
+    const messages = [
+      msg("u1", "user", "2026-09-15T12:17:17Z", ["fpdf", "fdocx"]),
+      msg("a1", "assistant", "2026-09-15T12:17:25Z", ["fpdf", "fdocx"]),
+    ];
+    const files = [
+      file("fpdf", "upload", "2026-09-15T12:17:00Z"),
+      file("fdocx", "upload", "2026-09-15T12:17:02Z"),
+    ];
+    const { byMessage, pending } = attachFilesToMessages(messages, files);
+    expect(byMessage.get("u1")?.map((f) => f.id)).toEqual(["fpdf", "fdocx"]);
+    expect(byMessage.get("a1")?.map((f) => f.id)).toEqual(["fpdf", "fdocx"]);
+    // …and naming a file twice does not mean showing it twice.
+    expect(pending).toHaveLength(0);
+  });
+
+  it("does not draw the same card twice when one message lists an id twice", () => {
+    const messages = [msg("m1", "user", "2026-09-15T12:00:00Z", ["f1", "f1"])];
+    const files = [file("f1", "upload", "2026-09-15T11:59:00Z")];
+    const { byMessage } = attachFilesToMessages(messages, files);
+    expect(byMessage.get("m1")?.map((f) => f.id)).toEqual(["f1"]);
+  });
+
+  it("a file named by a later reply is still not 'pending' — it has a home", () => {
+    // The claimed set still governs the composer-restore path: a file that
+    // any message names must never be dumped back into the composer.
+    const messages = [
+      msg("u1", "user", "2026-09-15T12:00:00Z", ["f1"]),
+      msg("a1", "assistant", "2026-09-15T12:00:09Z", ["f1"]),
+    ];
+    const files = [file("f1", "upload", "2026-09-15T11:59:00Z")];
+    expect(attachFilesToMessages(messages, files).pending).toHaveLength(0);
+  });
+
   it("uses exact meta.fileIds linkage when present", () => {
     const messages = [
       msg("m1", "user", "2026-07-02T10:00:00Z", ["f1"]),
