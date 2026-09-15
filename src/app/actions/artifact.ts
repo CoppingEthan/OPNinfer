@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth-helpers";
 import { fileWhereFor } from "@/lib/chat-access";
 import { statStoredFile } from "@/lib/storage";
 import { canPreview, previewKind, type PreviewKind } from "@/lib/artifact";
+import { gotenbergUrl } from "@/lib/office-preview";
 
 export interface ArtifactMeta {
   id: string;
@@ -14,6 +15,9 @@ export interface ArtifactMeta {
   kind: PreviewKind;
   previewable: boolean;
   conversationId: string | null;
+  /** The ingestion worker produced text for this one — what makes a .docx or
+   *  a .zip previewable at all. */
+  hasPrepared: boolean;
   /**
    * The file's modification time in ms — the cache key the panel puts in the
    * preview URL.
@@ -37,6 +41,7 @@ export async function getArtifactMeta(id: string): Promise<ArtifactMeta | null> 
       sizeBytes: true,
       mimeType: true,
       storagePath: true,
+      contentPath: true,
       conversationId: true,
       createdAt: true,
     },
@@ -65,7 +70,14 @@ export async function getArtifactMeta(id: string): Promise<ArtifactMeta | null> 
     sizeBytes,
     mimeType: file.mimeType,
     kind,
-    previewable: canPreview({ mimeType: file.mimeType, filename: file.filename, sizeBytes }),
+    hasPrepared: !!file.contentPath,
+    previewable: canPreview({
+      mimeType: file.mimeType,
+      filename: file.filename,
+      sizeBytes,
+      hasPrepared: !!file.contentPath,
+      officeToPdf: !!gotenbergUrl(),
+    }),
     conversationId: file.conversationId,
     version: Math.round(version),
   };

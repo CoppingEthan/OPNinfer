@@ -52,6 +52,12 @@ services:
   gotenberg:
     image: gotenberg/gotenberg:8
     restart: unless-stopped
+    # Published on loopback so the HOST-side dev server can reach it too — the
+    # artifact panel converts Office files to PDF through it, and in dev the
+    # app is not in this network. Same reason whisper publishes 9000.
+    #   GOTENBERG_URL=http://localhost:3009  in .env
+    ports:
+      - "127.0.0.1:3009:3000"
     command: ["gotenberg", "--api-timeout=120s"]
 
   # Sandbox broker ("guard hut") — the ONLY holder of the Docker socket. The

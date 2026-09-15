@@ -7,11 +7,13 @@ import {
   isFramed,
   isTextual,
   languageFor,
+  parseTable,
   previewKind,
   previewUrl,
+  splitDelimited,
 } from "./artifact";
 
-describe("images are never previewed", () => {
+describe("RASTER images are never previewed", () => {
   // The owner's rule: an image is the answer and already renders inline in the
   // reply. Showing it in a side panel too puts the same picture in two places,
   // one of them worse.
@@ -19,7 +21,6 @@ describe("images are never previewed", () => {
     for (const [mime, name] of [
       ["image/png", "chart.png"],
       ["image/jpeg", "photo.jpg"],
-      ["image/svg+xml", "logo.svg"],
       ["image/webp", "hero.webp"],
       ["image/gif", "loop.gif"],
     ] as const) {
@@ -41,6 +42,14 @@ describe("images are never previewed", () => {
     expect(previewKind("audio/mpeg", "call.mp3")).toBe("none");
     expect(previewKind("video/mp4", "clip.mp4")).toBe("none");
   });
+
+  it("but SVG is NOT one of them", () => {
+    // Vector source, and never rendered inline in a reply — so unlike a PNG
+    // there is nothing to duplicate, and it is usually the deliverable.
+    expect(previewKind("image/svg+xml", "logo.svg")).toBe("svg");
+    expect(previewKind("application/octet-stream", "mark.svg")).toBe("svg");
+    expect(isFramed("svg")).toBe(true);
+  });
 });
 
 describe("what a file previews as", () => {
@@ -49,7 +58,7 @@ describe("what a file previews as", () => {
     expect(previewKind("application/octet-stream", "build.py")).toBe("code");
     expect(previewKind("application/octet-stream", "advert.html")).toBe("html");
     expect(previewKind("application/octet-stream", "invoice.pdf")).toBe("pdf");
-    expect(previewKind("application/octet-stream", "rows.csv")).toBe("text");
+    expect(previewKind("application/octet-stream", "rows.csv")).toBe("csv");
   });
 
   it("honours a real mime type", () => {
@@ -59,10 +68,32 @@ describe("what a file previews as", () => {
     expect(previewKind("text/plain", "x")).toBe("text");
   });
 
-  it("says none for things a browser cannot show honestly", () => {
-    expect(previewKind("application/zip", "bundle.zip")).toBe("none");
-    expect(previewKind("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a.docx")).toBe("none");
+  it("sends office files down the LibreOffice route, for the real layout", () => {
+    expect(previewKind("application/octet-stream", "report.docx")).toBe("office");
+    expect(previewKind("application/octet-stream", "budget.xlsx")).toBe("office");
+    expect(previewKind("application/octet-stream", "deck.pptx")).toBe("office");
+    expect(previewKind("application/octet-stream", "notes.odt")).toBe("office");
+    // …and by mime when the name lost its extension.
+    expect(
+      previewKind("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "a"),
+    ).toBe("office");
+    expect(isFramed("office")).toBe(true);
+  });
+
+  it("falls back to the worker's text for what LibreOffice cannot lay out", () => {
+    expect(previewKind("application/zip", "bundle.zip")).toBe("converted");
+    expect(previewKind("application/octet-stream", "book.epub")).toBe("converted");
+    expect(previewKind("application/octet-stream", "thread.eml")).toBe("converted");
+  });
+
+  it("draws delimited files as a table", () => {
+    expect(previewKind("text/csv", "rows.csv")).toBe("csv");
+    expect(previewKind("application/octet-stream", "rows.tsv")).toBe("csv");
+  });
+
+  it("still says none for something genuinely unshowable", () => {
     expect(previewKind("application/octet-stream", "data.bin")).toBe("none");
+    expect(previewKind("application/x-executable", "tool")).toBe("none");
   });
 
   it("handles extensionless names that carry their type", () => {
@@ -89,6 +120,20 @@ describe("a preview is not a download", () => {
 
   it("lets a framed kind through at any size — the browser streams it", () => {
     expect(canPreview({ mimeType: "application/pdf", filename: "big.pdf", sizeBytes: 90_000_000 })).toBe(true);
+  });
+
+  it("an office file needs EITHER the converter or prepared text", () => {
+    const f = { mimeType: "application/octet-stream", filename: "report.docx", sizeBytes: 900_000 };
+    expect(canPreview({ ...f, officeToPdf: true, hasPrepared: false })).toBe(true);
+    expect(canPreview({ ...f, officeToPdf: false, hasPrepared: true })).toBe(true);
+    // Neither: a spinner that never resolves is worse than an honest Download.
+    expect(canPreview({ ...f, officeToPdf: false, hasPrepared: false })).toBe(false);
+  });
+
+  it("a .zip with no prepared text has nothing to show", () => {
+    const f = { mimeType: "application/zip", filename: "b.zip", sizeBytes: 1000 };
+    expect(canPreview({ ...f, hasPrepared: true })).toBe(true);
+    expect(canPreview({ ...f, hasPrepared: false })).toBe(false);
   });
 
   it("never previews an image however small", () => {
@@ -129,5 +174,35 @@ describe("the version in the URL is what makes updates land", () => {
 
   it("produces a DIFFERENT url for a different version", () => {
     expect(previewUrl("abc", 1)).not.toBe(previewUrl("abc", 2));
+  });
+});
+
+describe("delimited files", () => {
+  it("splits on the delimiter, honouring quotes", () => {
+    expect(splitDelimited("a,b,c", ",")).toEqual(["a", "b", "c"]);
+    expect(splitDelimited('a,"b,c",d', ",")).toEqual(["a", "b,c", "d"]);
+    expect(splitDelimited('"he said ""hi""",x', ",")).toEqual(['he said "hi"', "x"]);
+    expect(splitDelimited("a\tb", "\t")).toEqual(["a", "b"]);
+  });
+
+  it("takes the first row as the header and caps the body", () => {
+    const csv = ["name,qty", ...Array.from({ length: 500 }, (_, i) => `row${i},${i}`)].join("\n");
+    const t = parseTable(csv, "x.csv", 200);
+    expect(t.header).toEqual(["name", "qty"]);
+    expect(t.rows).toHaveLength(200);
+    // Saying so matters: showing 200 of 500 silently is a lie.
+    expect(t.truncated).toBe(true);
+  });
+
+  it("does not claim truncation when it showed everything", () => {
+    const t = parseTable("a,b\n1,2\n3,4", "x.csv", 200);
+    expect(t.rows).toHaveLength(2);
+    expect(t.truncated).toBe(false);
+  });
+
+  it("uses tabs for a .tsv", () => {
+    const t = parseTable("a\tb\n1\t2", "x.tsv");
+    expect(t.header).toEqual(["a", "b"]);
+    expect(t.rows[0]).toEqual(["1", "2"]);
   });
 });

@@ -491,3 +491,41 @@ select:focus-visible {
   .oi-file-card:hover { transform: none; }
   .oi-file-card:hover [class*="oi-fc-"] { animation: none; }
 }
+
+/* ----------------------------------------------------------------------
+   The artifact panel slides in from the edge.
+
+   A KEYFRAME, not a transition on a class that flips after mount. A
+   transition needs the browser to have painted the starting state, and an
+   element that is inserted and revealed inside one frame has no starting
+   state to paint — so it simply jumps, which is exactly what the first
+   version did (measured frame by frame in test-artifact-panel.ts: 45 frames,
+   one position). An animation plays from its own first frame, whenever that
+   frame happens to be, so the motion no longer depends on React's commit
+   timing racing the compositor.
+
+   `backwards` on the way in and never `both`: a transform left behind gives
+   the panel its own stacking layer for ever after — the lesson the file
+   cards' entrance animation already taught. On the way out `forwards` is
+   needed to hold it off-screen for the 180ms before it unmounts.
+   ---------------------------------------------------------------------- */
+@keyframes oi-artifact-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes oi-artifact-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+.oi-artifact-in {
+  animation: oi-artifact-in 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+.oi-artifact-out {
+  animation: oi-artifact-out 180ms ease-in forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oi-artifact-in,
+  .oi-artifact-out {
+    animation: none;
+  }
+}

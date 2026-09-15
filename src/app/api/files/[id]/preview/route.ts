@@ -6,6 +6,9 @@ import { readFileStream } from "@/lib/storage";
 import { hasSudo } from "@/lib/sudo";
 import { audit } from "@/lib/audit";
 import { MAX_PREVIEW_BYTES, isFramed, isTextual, previewKind } from "@/lib/artifact";
+import { readFile } from "node:fs/promises";
+import { resolveStoredPathForRead } from "@/lib/storage";
+import { officeAsPdf } from "@/lib/office-preview";
 
 export const dynamic = "force-dynamic";
 
@@ -36,10 +39,13 @@ export const dynamic = "force-dynamic";
 
 const TYPE_FOR: Record<string, string> = {
   html: "text/html; charset=utf-8",
+  svg: "image/svg+xml",
   pdf: "application/pdf",
   markdown: "text/plain; charset=utf-8",
   code: "text/plain; charset=utf-8",
   text: "text/plain; charset=utf-8",
+  csv: "text/plain; charset=utf-8",
+  converted: "text/plain; charset=utf-8",
 };
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -71,6 +77,61 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (kind === "none") {
     return new Response("Not previewable", { status: 415 });
   }
+  /**
+   * Word, Excel, PowerPoint. Converted to PDF by the same LibreOffice engine
+   * the ingestion worker uses, so it previews with its REAL layout rather than
+   * as extracted text. Cached after the first conversion.
+   *
+   * If the engine is not configured or not reachable, fall THROUGH to the
+   * prepared text below: the words without the layout is an honest degradation,
+   * a spinner that never resolves is not.
+   */
+  if (kind === "office") {
+    const pdf = await officeAsPdf({
+      fileId: file.id,
+      filename: file.filename,
+      storagePath: file.storagePath,
+      contentPath: file.contentPath,
+    });
+    if (pdf) {
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Length": String(pdf.byteLength),
+          "Content-Disposition": `inline; filename="${encodeURIComponent(file.filename)}.pdf"`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "sandbox",
+        },
+      });
+    }
+  }
+
+  /**
+   * A format no browser can render, which the ingestion worker already turned
+   * into text. Serve THAT, not the original bytes — the alternative is either
+   * a download dressed up as a preview or nothing at all, and the conversion
+   * is the same text the assistant itself reads.
+   */
+  if (kind === "converted" || kind === "office") {
+    if (!file.contentPath) return new Response("No preview was prepared", { status: 415 });
+    try {
+      const prepared = await readFile(await resolveStoredPathForRead(file.contentPath), "utf8");
+      return new Response(prepared.slice(0, MAX_PREVIEW_BYTES), {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Content-Disposition": `inline; filename="${encodeURIComponent(file.filename)}.md"`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Security-Policy": "sandbox",
+          "X-Frame-Options": "DENY",
+        },
+      });
+    } catch {
+      return new Response("No preview was prepared", { status: 415 });
+    }
+  }
+
   if (isTextual(kind) && Number(file.sizeBytes) > MAX_PREVIEW_BYTES) {
     return new Response("Too large to preview", { status: 413 });
   }

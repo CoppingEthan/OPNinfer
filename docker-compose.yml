@@ -64,6 +64,9 @@ services:
       # Shared engines (docker-compose.engines.yml, always on).
       WHISPER_URL: http://whisper:9000
       TTS_URL: http://kokoro:8880
+      # The APP needs this as well as the worker: the artifact panel converts
+      # Office files to PDF so they preview with their real layout.
+      GOTENBERG_URL: http://gotenberg:3000
       TTS_VOICE: ${TTS_VOICE:-af_heart}
       # Sandbox broker (v0.3 agentic tools). The app can only ASK; all policy
       # lives in sandboxd.

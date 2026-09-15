@@ -4,7 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getArtifactMeta, type ArtifactMeta } from "@/app/actions/artifact";
-import { formatSize, isFramed, isTextual, languageFor, previewUrl } from "@/lib/artifact";
+import {
+  formatSize,
+  isFramed,
+  isTextual,
+  languageFor,
+  parseTable,
+  previewUrl,
+} from "@/lib/artifact";
 import { CodeView } from "./tool-run";
 
 /**
@@ -51,6 +58,12 @@ export function ArtifactPanel() {
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [width, setWidth] = useState(480);
+  /**
+   * On its way out. The panel slides in on mount by itself (a CSS animation,
+   * see .oi-artifact-in) but it cannot slide OUT after it has been unmounted,
+   * so closing is two steps: play the exit, then drop it.
+   */
+  const [closing, setClosing] = useState(false);
 
   useEffect(() => {
     try {
@@ -99,6 +112,7 @@ export function ArtifactPanel() {
 
   useEffect(() => {
     if (!fileId) return;
+    setClosing(false);
     void load(fileId);
   }, [fileId, load]);
 
@@ -161,11 +175,20 @@ export function ArtifactPanel() {
 
   if (!fileId) return null;
 
+  /** Rendered by the browser's PDF viewer rather than as a web page. */
+  const pdfish = meta?.kind === "pdf" || meta?.kind === "office";
+
   const close = () => {
-    setFileId(null);
-    setMeta(null);
-    setBody(null);
-    setError(null);
+    // Slide out first, THEN unmount — otherwise the exit animation has nothing
+    // to play on. The timeout matches .oi-artifact-out.
+    setClosing(true);
+    setTimeout(() => {
+      setFileId(null);
+      setMeta(null);
+      setBody(null);
+      setError(null);
+      setClosing(false);
+    }, 180);
   };
 
   return (
@@ -181,8 +204,9 @@ export function ArtifactPanel() {
         // Under md it is the whole screen, with a cross — a 400px reading
         // panel on a phone is neither the chat nor the document.
         "fixed inset-0 z-40 flex w-full flex-col border-border bg-background " +
-        "md:relative md:inset-auto md:z-auto md:border-l " +
-        (expanded ? "md:w-full" : "md:w-[var(--oi-artifact-w)] md:shrink-0")
+        (closing ? "oi-artifact-out" : "oi-artifact-in") +
+        " md:relative md:inset-auto md:z-auto md:border-l " +
+        (expanded ? " md:w-full" : " md:w-[var(--oi-artifact-w)] md:shrink-0")
       }
     >
       {/* Drag handle — desktop only, and not while expanded. */}
@@ -243,6 +267,13 @@ export function ArtifactPanel() {
         </button>
       </header>
 
+      {meta?.kind === "converted" && meta.previewable ? (
+        <p className="border-b border-border bg-surface px-3 py-1.5 text-xs text-muted">
+          Converted to text when it was uploaded — the words, not the layout.
+          Download it to see the original.
+        </p>
+      ) : null}
+
       <div ref={viewport} className="oi-scroll min-h-0 flex-1 overflow-auto">
         {loading && !meta ? (
           <p className="p-4 text-sm text-muted">Opening…</p>
@@ -265,9 +296,20 @@ export function ArtifactPanel() {
           </div>
         ) : isFramed(meta.kind) ? (
           <div
-            // The wrapper takes the SCALED size, so the scroll container sees
-            // the real footprint rather than the pre-scale one.
-            style={{ width: FRAME_WIDTH * scale, height: `${100 / scale}%` }}
+            /**
+             * A PDF fits ITSELF. Chrome's viewer already sizes the page to the
+             * frame, so scaling a 1200px frame down to the panel width just
+             * renders the document as a postage stamp with a full-size toolbar
+             * around it. The 1200px design width is for the other kind of
+             * framed artifact — an HTML page the agent built at desktop size,
+             * which would otherwise reflow into a phone layout and stop being
+             * the thing it made.
+             */
+            style={
+              pdfish
+                ? { width: "100%", height: "100%" }
+                : { width: FRAME_WIDTH * scale, height: `${100 / scale}%` }
+            }
             className="origin-top-left"
           >
             <iframe
@@ -275,16 +317,42 @@ export function ArtifactPanel() {
               // re-load a frame, and a stale advert is exactly what this panel
               // exists to avoid.
               key={previewUrl(meta.id, meta.version)}
-              src={previewUrl(meta.id, meta.version)}
+              // `#toolbar=0&navpanes=0&view=FitH` for a PDF: the panel's own
+              // header already carries the name, the size, Download and
+              // Expand, so the viewer's toolbar and thumbnail rail are a
+              // second set of controls competing with ours in 480px.
+              src={previewUrl(meta.id, meta.version) + (pdfish ? "#toolbar=0&navpanes=0&view=FitH" : "")}
               title={meta.filename}
-              // Belt and braces with the route's `CSP: sandbox`.
-              sandbox=""
-              style={{ width: FRAME_WIDTH, transform: `scale(${scale})` }}
+              /**
+               * MARKUP gets `sandbox=""` — belt and braces with the route's
+               * `CSP: sandbox`, and the whole reason an agent-written advert
+               * can be read here safely.
+               *
+               * A PDF must NOT have the attribute at all. Chrome's PDF viewer
+               * is an extension, and it refuses to run inside a sandboxed
+               * frame — measured, all six ways: `sandbox=""` and even
+               * `sandbox="allow-scripts"` both draw the sad-face placeholder,
+               * with or without the header, while no attribute renders the
+               * document. So every Office and PDF preview was a blank panel,
+               * silently: no error, no console line, nothing to search for.
+               * (Playwright's bundled Chromium has no PDF viewer at all, so
+               * this can only be seen in real Chrome — `channel: "chrome"`.)
+               *
+               * Dropping it costs little: the RESPONSE still carries
+               * `CSP: sandbox`, so the document is in an opaque origin, and
+               * `nosniff` with an explicit `application/pdf` means it can
+               * never be re-read as HTML. What a PDF's own scripts can reach
+               * is the viewer, never this page.
+               */
+              {...(meta.kind === "pdf" || meta.kind === "office" ? {} : { sandbox: "" as const })}
+              style={pdfish ? { width: "100%", height: "100%" } : { width: FRAME_WIDTH, transform: `scale(${scale})` }}
               // A document with no background of its own would otherwise show
               // the browser's default white through a dark page.
               className="h-full origin-top-left border-0 bg-white"
             />
           </div>
+        ) : meta.kind === "csv" && body !== null ? (
+          <TablePreview text={body} filename={meta.filename} />
         ) : meta.kind === "markdown" && body !== null ? (
           <div className="markdown p-5 text-sm">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
@@ -298,6 +366,46 @@ export function ArtifactPanel() {
         )}
       </div>
     </aside>
+  );
+}
+
+/** A delimited file drawn as a table. Capped rows, and it says when it capped
+ *  them — a preview that silently shows 200 of 40,000 rows is a lie. */
+function TablePreview({ text, filename }: { text: string; filename: string }) {
+  const { header, rows, truncated } = parseTable(text, filename);
+  if (header.length === 0) return <p className="p-4 text-sm text-muted">Nothing to show.</p>;
+  return (
+    <div className="p-3">
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full border-collapse text-xs">
+          <thead>
+            <tr className="bg-surface">
+              {header.map((h, i) => (
+                <th key={i} className="whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left font-semibold text-foreground">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="odd:bg-surface/40">
+                {header.map((_, c) => (
+                  <td key={c} className="whitespace-nowrap border-b border-border/60 px-2.5 py-1 text-muted">
+                    {r[c] ?? ""}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {truncated ? (
+        <p className="mt-2 text-xs text-muted">
+          First {rows.length} rows. Download it for the rest.
+        </p>
+      ) : null}
+    </div>
   );
 }
 

@@ -10,13 +10,18 @@
  *   3. at 390px the panel fills the screen AND its close cross is reachable.
  *      That last one is not hypothetical: an inline `width` beat `inset-0`
  *      and pushed every control off the right edge, so the panel could be
- *      opened and not shut. Nothing but measuring it at phone width finds it.
+ *      opened and not shut. Nothing but measuring it at phone width finds it;
+ *   4. it SLIDES in rather than appearing — measured frame by frame, because
+ *      "the class is on the element" proves nothing about motion;
+ *   5. a Word document previews as a laid-out PDF, a CSV draws as a table,
+ *      and an SVG is framed rather than refused for being an image.
  *
  * No model calls — the files are seeded, so this is free and deterministic.
  *
  *   node --import tsx --loader ./scripts/shim-server-only.mjs --env-file=.env scripts/test-artifact-panel.ts
  */
 import { chromium, type Page } from "@playwright/test";
+import JSZip from "jszip";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "../src/lib/db";
@@ -61,6 +66,31 @@ async function signIn(email: string) {
 
 const panel = (page: Page) => page.locator("[data-artifact-panel]");
 
+/**
+ * Wait until the panel has finished sliding.
+ *
+ * Not politeness — the first version of this harness measured the close cross
+ * the instant the panel became "visible", which is frame ONE of a 220ms
+ * animation, and reported it as off-screen at x=738 on a 390px phone. The
+ * panel was fine; the stopwatch was wrong. Waiting for the outcome (transform
+ * back to zero) rather than for a duration is the same rule as everywhere else.
+ */
+async function settled(page: Page, timeoutMs = 5_000): Promise<number> {
+  const started = Date.now();
+  for (;;) {
+    const x = (await page.evaluate(`
+      (() => {
+        const el = document.querySelector("[data-artifact-panel]");
+        if (!el) return null;
+        return new DOMMatrixReadOnly(getComputedStyle(el).transform).m41;
+      })()
+    `)) as number | null;
+    if (x !== null && Math.abs(x) < 0.5) return Date.now() - started;
+    if (Date.now() - started > timeoutMs) throw new Error(`panel never settled (x=${x})`);
+    await page.waitForTimeout(25);
+  }
+}
+
 async function main() {
   const stamp = Date.now();
   const user = await db.user.create({
@@ -91,6 +121,41 @@ async function main() {
       "base64",
     );
     await writeFile(path.join(dir, "chart.png"), png);
+    const CSV = "Region,Orders,Value\nNorth,124,\"1,240.00\"\nSouth,98,980.00\nWest,7,70.00\n";
+    await writeFile(path.join(dir, "orders.csv"), CSV, "utf8");
+    const SVG =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40">' +
+      '<rect width="120" height="40" fill="#123"/><text x="8" y="26" fill="#fff">MARK</text></svg>';
+    await writeFile(path.join(dir, "mark.svg"), SVG, "utf8");
+    // A REAL .docx, built here rather than copied from whatever this instance
+    // happens to hold — so the check is the same on an empty install, and no
+    // one's document is dragged into a test run.
+    const zip = new JSZip();
+    zip.file(
+      "[Content_Types].xml",
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+        "</Types>",
+    );
+    zip.file(
+      "_rels/.rels",
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+        "</Relationships>",
+    );
+    zip.file(
+      "word/document.xml",
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        "<w:p><w:r><w:t>Quarterly handover</w:t></w:r></w:p>" +
+        "</w:body></w:document>",
+    );
+    const docx = await zip.generateAsync({ type: "nodebuffer" });
+    await writeFile(path.join(dir, "report.docx"), docx);
 
     const mk = (filename: string, mimeType: string, size: number) =>
       db.file.create({
@@ -107,6 +172,12 @@ async function main() {
       });
     const doc = await mk("handover.md", "application/octet-stream", NOTE.length);
     const img = await mk("chart.png", "image/png", png.length);
+    const csv = await mk("orders.csv", "text/csv", CSV.length);
+    const svg = await mk("mark.svg", "image/svg+xml", SVG.length);
+    // Deliberately NO contentPath: nothing has prepared text for it, so the
+    // only way it can preview at all is the conversion engine. That makes this
+    // one file a probe for whether the server under test actually has one.
+    const office = await mk("report.docx", "application/octet-stream", docx.length);
 
     // A reply that presents both, so the cards render in the thread.
     const now = Date.now();
@@ -125,7 +196,7 @@ async function main() {
         role: "assistant",
         content: "Here it is.",
         createdAt: new Date(now + 1000),
-        meta: { fileIds: [doc.id, img.id] },
+        meta: { fileIds: [doc.id, img.id, csv.id, svg.id, office.id] },
       },
     });
 
@@ -147,6 +218,25 @@ async function main() {
     check("the panel is not there until something asks for it", (await panel(page).count()) === 0);
 
     // ---- 1. a card opens that file -------------------------------------
+    // Plant the sampler BEFORE the click: an animation cannot be measured
+    // after it has finished, and reading a class name would only prove the
+    // class is there — not that anything moved.
+    await page.evaluate(`
+      window.__slide = [];
+      const obs = new MutationObserver(() => {
+        const el = document.querySelector("[data-artifact-panel]");
+        if (!el || window.__watching) return;
+        window.__watching = true;
+        let n = 0;
+        const tick = () => {
+          const m = new DOMMatrixReadOnly(getComputedStyle(el).transform);
+          window.__slide.push(Math.round(m.m41));
+          if (++n < 45) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    `);
     await page.locator('[data-file-card="handover.md"] button').first().click();
     await panel(page).waitFor({ state: "visible", timeout: 20_000 });
     check(
@@ -177,6 +267,26 @@ async function main() {
       check(`the ${label} control is there`, (await panel(page).getByLabel(label).count()) > 0);
     }
 
+    // ---- 1b. it slides, and lands ---------------------------------------
+    const settleMs = await settled(page);
+    const slide = (await page.evaluate("window.__slide")) as number[];
+    const moved = new Set(slide).size;
+    check(
+      "it STARTS off-screen to the right",
+      slide.length > 0 && Math.max(...slide) > 100,
+      `first ${slide[0]}px, max ${slide.length ? Math.max(...slide) : "-"}px`,
+    );
+    check(
+      "…travels across several frames rather than snapping",
+      moved >= 3,
+      `${moved} distinct positions over ${slide.length} frames`,
+    );
+    check(
+      "…and settles flush against the conversation, quickly",
+      slide.length > 0 && Math.abs(slide[slide.length - 1]) <= 1 && settleMs < 1_000,
+      `${slide[slide.length - 1]}px after ${settleMs}ms`,
+    );
+
     // ---- 2. an image must NEVER be RENDERED ---------------------------
     // (Opening the panel on one is fine and better than a dead click — it
     // says so and offers the download. What must never happen is the image
@@ -202,6 +312,85 @@ async function main() {
     check("…while serving the document inline", ok.status() === 200 && (ok.headers()["content-disposition"] ?? "").startsWith("inline"), `${ok.status()} ${ok.headers()["content-disposition"] ?? ""}`);
     check("…sandboxed, so an HTML artifact cannot touch this origin", (ok.headers()["content-security-policy"] ?? "") === "sandbox");
 
+    // ---- 2b. the formats that are the point of this round ---------------
+    const openIt = async (fileId: string, waitFor: RegExp | string) => {
+      await page.evaluate(
+        `window.dispatchEvent(new CustomEvent("oi-open-artifact", { detail: { fileId: ${JSON.stringify(fileId)} } }))`,
+      );
+      await panel(page).waitFor({ state: "visible", timeout: 20_000 });
+      await panel(page).getByText(waitFor).first().waitFor({ state: "visible", timeout: 20_000 });
+    };
+
+    // A spreadsheet-shaped file is drawn as a TABLE, not dumped as raw text —
+    // and the quoted comma stays inside one cell.
+    await openIt(csv.id, "orders.csv");
+    const table = panel(page).locator("table");
+    await table.first().waitFor({ state: "visible", timeout: 20_000 });
+    const headers = await table.locator("th").allInnerTexts();
+    check("a CSV draws as a table with its own header row", headers.join("|") === "Region|Orders|Value", headers.join("|"));
+    const firstRow = await table.locator("tbody tr").first().locator("td").allInnerTexts();
+    check(
+      "…and a quoted comma stays in ONE cell",
+      firstRow[2] === "1,240.00",
+      firstRow.join(" / "),
+    );
+
+    // An SVG is vector source and never renders inline in a reply, so unlike a
+    // PNG there is nothing to duplicate — it must NOT be swept up by the image
+    // rule. This is the counterpart to the image negative control above.
+    const svgRes = await page.request.get(`${BASE}/api/files/${svg.id}/preview`);
+    check(
+      "an SVG previews rather than being refused as an image",
+      svgRes.status() === 200 && (svgRes.headers()["content-type"] ?? "").startsWith("image/svg"),
+      `${svgRes.status()} ${svgRes.headers()["content-type"] ?? ""}`,
+    );
+
+    // The owner's ask: Office files shown exactly as the office suite would.
+    // This file has no prepared text, so a 200 here can only have come from the
+    // LibreOffice conversion.
+    const offRes = await page.request.get(`${BASE}/api/files/${office.id}/preview`);
+    const offType = offRes.headers()["content-type"] ?? "";
+    if (offRes.status() === 415) {
+      check(
+        "a .docx converts to PDF for preview",
+        false,
+        "415 — the SERVER under test has no GOTENBERG_URL. Add it to .env and restart pnpm dev.",
+      );
+    } else {
+      check(
+        "a .docx converts to PDF for preview — the real layout, not extracted text",
+        offRes.status() === 200 && offType.startsWith("application/pdf"),
+        `${offRes.status()} ${offType}`,
+      );
+      const head = (await offRes.body()).subarray(0, 5).toString("latin1");
+      check("…and the bytes really are a PDF", head === "%PDF-", head);
+      await openIt(office.id, "report.docx");
+      const frame = panel(page).locator("iframe").first();
+      check("…shown in a frame, so the browser renders the pages", (await frame.count()) > 0);
+      // The frame must NOT be sandboxed: Chrome's PDF viewer is an extension
+      // and refuses to run inside a sandboxed frame, so the attribute — which
+      // looks like pure caution — makes every Office preview silently blank.
+      // Only the ATTRIBUTE can be checked here: Playwright's Chromium has no
+      // PDF viewer, so it draws nothing either way (measured in real Chrome).
+      check(
+        "…and NOT sandboxed, or Chrome draws nothing at all",
+        (await frame.getAttribute("sandbox")) === null,
+        `sandbox=${JSON.stringify(await frame.getAttribute("sandbox"))}`,
+      );
+    }
+
+    // Markup keeps the sandbox — that is what makes reading an agent-written
+    // page here safe, and it is the half that must NOT be relaxed.
+    await openIt(svg.id, "mark.svg");
+    {
+      const frame = panel(page).locator("iframe").first();
+      check(
+        "an SVG IS sandboxed — the half that must not be relaxed",
+        (await frame.getAttribute("sandbox")) === "",
+        `sandbox=${JSON.stringify(await frame.getAttribute("sandbox"))}`,
+      );
+    }
+
     // ---- 3. close, then the phone ---------------------------------------
     await panel(page).getByLabel("Close").click();
     await page.waitForTimeout(500);
@@ -219,8 +408,13 @@ async function main() {
       `window.dispatchEvent(new CustomEvent("oi-open-artifact", { detail: { fileId: ${JSON.stringify(doc.id)} } }))`,
     );
     await panel(small).waitFor({ state: "visible", timeout: 20_000 });
+    await settled(small);
     const box = await panel(small).boundingBox();
-    check("on a phone it fills the width", !!box && box.width >= 380 && box.width <= 391, `${box?.width ?? "?"}px of 390`);
+    check(
+      "on a phone it fills the width, flush to the left edge",
+      !!box && box.width >= 380 && box.width <= 391 && Math.abs(box.x) < 1,
+      `${box?.width ?? "?"}px of 390 at x=${Math.round(box?.x ?? -1)}`,
+    );
 
     // The regression that mattered: an inline width beat inset-0, the controls
     // went off the right edge, and the panel could be opened but not shut.
