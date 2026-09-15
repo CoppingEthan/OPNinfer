@@ -33,8 +33,18 @@ const nextConfig: NextConfig = {
   // which is where node resolves the platform package from at runtime (it
   // walks up to the sibling `node_modules/@anthropic-ai/` scope), so the
   // copy that is actually used survives and the duplicate goes.
+  // Same class of problem for the PDF viewer: /api/pdfjs reads the worker,
+  // the character maps and the standard-font metrics out of node_modules at
+  // RUNTIME, so nothing imports them and the tracer ships none of them. In dev
+  // that is invisible; in production every document would fail to open.
   outputFileTracingIncludes: {
-    "/**": ["./node_modules/.pnpm/@anthropic-ai+claude-agent-sdk@*/**"],
+    "/**": [
+      "./node_modules/.pnpm/@anthropic-ai+claude-agent-sdk@*/**",
+      "./node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+      "./node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/cmaps/**",
+      "./node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/standard_fonts/**",
+      "./node_modules/.pnpm/pdfjs-dist@*/node_modules/pdfjs-dist/package.json",
+    ],
   },
   experimental: {
     // When middleware runs on a route, Next clones the request body to replay

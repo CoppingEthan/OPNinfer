@@ -151,7 +151,10 @@ async function main() {
       "word/document.xml",
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
-        "<w:p><w:r><w:t>Quarterly handover</w:t></w:r></w:p>" +
+        // Several real paragraphs on purpose: counting the ink on a page with
+        // one short line on it is mostly counting antialiasing, and would pass
+        // on a render that had very nearly failed.
+        '<w:p><w:r><w:t>Quarterly handover</w:t></w:r></w:p><w:p><w:r><w:t>The stock count runs before opening on Monday so that what the system believes is on the shelf and what is actually on the shelf do not drift apart across a quarter.</w:t></w:r></w:p><w:p><w:r><w:t>Print the count sheet from the back office terminal before the doors open.</w:t></w:r></w:p><w:p><w:r><w:t>Walk the aisles in the order printed, not the order they happen to be stocked.</w:t></w:r></w:p><w:p><w:r><w:t>Key the totals in before ten so the replenishment run picks them up the same day.</w:t></w:r></w:p><w:p><w:r><w:t>Anything that does not reconcile is raised with the duty manager that morning and never carried into the following week.</w:t></w:r></w:p>' +
         "</w:body></w:document>",
     );
     const docx = await zip.generateAsync({ type: "nodebuffer" });
@@ -204,11 +207,39 @@ async function main() {
     const ctx = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       ignoreHTTPSErrors: true,
+      // A REAL screen, not a 1x one. Everything this harness checks about the
+      // PDF renderer — the backing-store scaling especially — takes a
+      // different path at devicePixelRatio 1, which is where an owner's
+      // "page 1 is upside down" would hide from it entirely.
+      deviceScaleFactor: 2,
     });
     await ctx.addCookies(cookies);
     const page = await ctx.newPage();
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(String(e)));
+    const console_: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "error" || m.type() === "warning") console_.push(`${m.type()}: ${m.text()}`);
+    });
+    const bad: string[] = [];
+    page.on("response", (r) => {
+      if (r.status() >= 400) bad.push(`${r.status()} ${new URL(r.url()).pathname}`);
+    });
+
+    // A SAVED PANEL WIDTH, because anyone who has ever dragged the panel has
+    // one. It is read from localStorage in an effect, so the panel mounts at
+    // the 480px default and changes width a moment later — which re-renders
+    // whichever page is already on screen while its first render is still in
+    // flight. Two render() calls on one canvas is undefined behaviour in
+    // pdf.js, and the owner saw it as page 1 upside down. A fresh profile
+    // never has this value, which is exactly why the harness could not see it.
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("oi-artifact-width", "560");
+      } catch {
+        /* private window */
+      }
+    });
 
     // NEVER networkidle on /chat — the live feed holds a request open forever.
     await page.goto(`${BASE}/chat/${convo.id}`, { waitUntil: "domcontentloaded" });
@@ -365,22 +396,124 @@ async function main() {
       const head = (await offRes.body()).subarray(0, 5).toString("latin1");
       check("…and the bytes really are a PDF", head === "%PDF-", head);
       await openIt(office.id, "report.docx");
-      const frame = panel(page).locator("iframe").first();
-      check("…shown in a frame, so the browser renders the pages", (await frame.count()) > 0);
-      // The frame must NOT be sandboxed: Chrome's PDF viewer is an extension
-      // and refuses to run inside a sandboxed frame, so the attribute — which
-      // looks like pure caution — makes every Office preview silently blank.
-      // Only the ATTRIBUTE can be checked here: Playwright's Chromium has no
-      // PDF viewer, so it draws nothing either way (measured in real Chrome).
+
+      /**
+       * THE point of this whole section, and the reason it is worth running in
+       * headless Chromium specifically: Playwright's bundled Chromium ships NO
+       * PDF VIEWER AT ALL. An <iframe> here could never draw a page. So if the
+       * pixels below exist, they were produced by our own renderer and by
+       * nothing the browser brought — which is exactly the property the owner's
+       * report demanded, their Chrome having been set to download PDFs rather
+       * than display them.
+       */
+      const view = panel(page).locator("[data-pdf-view]");
+      await view.waitFor({ state: "visible", timeout: 20_000 });
+      // The text layer only exists once a page has finished rendering.
+      try {
+        await view.locator("[data-pdf-text] span").first().waitFor({ state: "attached", timeout: 30_000 });
+      } catch (e) {
+        // A render that never happens must say why, or the next hour goes on
+        // guessing which of the worker, the fetch and the canvas gave up.
+        console.error("panel says:", (await panel(page).innerText()).replace(/\s+/g, " ").slice(0, 200));
+        console.error("console:", console_.slice(0, 6).join(" | ") || "(nothing)");
+        console.error("failed requests:", bad.slice(0, 6).join(" | ") || "(none)");
+        throw e;
+      }
+
       check(
-        "…and NOT sandboxed, or Chrome draws nothing at all",
-        (await frame.getAttribute("sandbox")) === null,
-        `sandbox=${JSON.stringify(await frame.getAttribute("sandbox"))}`,
+        "NEGATIVE CONTROL: no iframe at all — this browser cannot draw a PDF",
+        (await panel(page).locator("iframe").count()) === 0,
+      );
+
+      const canvas = await view.locator("canvas").first().boundingBox();
+      check(
+        "a .docx is DRAWN as a laid-out page",
+        !!canvas && canvas.width > 200 && canvas.height > 200,
+        canvas ? `${Math.round(canvas.width)}x${Math.round(canvas.height)}` : "no canvas",
+      );
+      // …and it is not blank: a canvas of the right size full of nothing is
+      // exactly what a broken render looks like.
+      const ink = await view.locator("canvas").first().evaluate((c) => {
+        const el = c as HTMLCanvasElement;
+        const d = el.getContext("2d")!.getImageData(0, 0, el.width, el.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i] < 200 || d[i + 1] < 200 || d[i + 2] < 200) n++;
+        return n;
+      });
+      check("…with actual ink on it, not an empty canvas", ink > 3_000, `${ink} dark pixels`);
+
+      // WHICH WAY UP. The test document is several paragraphs at the top of an
+      // otherwise empty A4 page, so a correct render is top-heavy by a mile
+      // and a flipped one is bottom-heavy. Counting ink alone cannot tell them
+      // apart — it is the same pixels either way.
+      const halves = await view.locator("canvas").first().evaluate((c) => {
+        const el = c as HTMLCanvasElement;
+        const half = Math.floor(el.height / 2);
+        const d = el.getContext("2d")!.getImageData(0, 0, el.width, el.height).data;
+        let top = 0;
+        let bottom = 0;
+        for (let y = 0; y < el.height; y++) {
+          for (let x = 0; x < el.width; x++) {
+            if (d[(y * el.width + x) * 4] < 200) {
+              if (y < half) top++;
+              else bottom++;
+            }
+          }
+        }
+        return { top, bottom };
+      });
+      check(
+        "…the RIGHT WAY UP — the text is at the top of the page, not the bottom",
+        halves.top > halves.bottom * 3,
+        `top ${halves.top} vs bottom ${halves.bottom}`,
+      );
+
+      // A picture of a page would lose this, which is why it is not a picture.
+      const words = await view.locator("[data-pdf-text] span").allInnerTexts();
+      check(
+        "…and the words are still text — selectable, copyable, searchable",
+        words.join(" ").includes("Quarterly handover"),
+        words.join(" ").slice(0, 60),
       );
     }
 
-    // Markup keeps the sandbox — that is what makes reading an agent-written
-    // page here safe, and it is the half that must NOT be relaxed.
+    /**
+     * A file whose ROW SIZE IS WRONG must still be served whole.
+     *
+     * `files.size_bytes` lags — `present_files` fires mid-run and `syncPool`
+     * only re-stamps the row when the agent finishes — so the column can say
+     * one thing while the disk says another. The route used to put that column
+     * in Content-Length while streaming the real file, and the browser stopped
+     * reading at the number: a 116 KB PDF arrived as a fragment and pdf.js
+     * refused it as "Invalid PDF structure". Found live on a real document.
+     */
+    {
+      const bytes = await (await page.request.get(`${BASE}/api/files/${office.id}/preview`)).body();
+      await writeFile(path.join(dir, "stale.pdf"), bytes);
+      const stale = await db.file.create({
+        data: {
+          userId: user.id,
+          conversationId: convo.id,
+          filename: "stale.pdf",
+          mimeType: "application/pdf",
+          // Deliberately, badly wrong — as a lagging row is.
+          sizeBytes: BigInt(512),
+          storagePath: `${chatPoolRelDir(convo.id)}/stale.pdf`,
+          kind: "generated",
+          status: "ready",
+        },
+      });
+      const res2 = await page.request.get(`${BASE}/api/files/${stale.id}/preview`);
+      const got = await res2.body();
+      check(
+        "a file whose row size is stale is still served WHOLE, not truncated",
+        got.length === bytes.length,
+        `${got.length} of ${bytes.length} bytes, header said ${res2.headers()["content-length"]}`,
+      );
+    }
+
+    // Markup is still framed, and still sandboxed — that is what makes reading
+    // an agent-written page here safe, and it is the half that must NOT relax.
     await openIt(svg.id, "mark.svg");
     {
       const frame = panel(page).locator("iframe").first();

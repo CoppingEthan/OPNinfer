@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { auth } from "@/auth";
 import { db } from "@/lib/db";
 import { fileWhereFor } from "@/lib/chat-access";
-import { readFileStream } from "@/lib/storage";
+import { readFileStream, statStoredFile } from "@/lib/storage";
 import { hasSudo } from "@/lib/sudo";
 import { audit } from "@/lib/audit";
 import { MAX_PREVIEW_BYTES, isFramed, isTextual, previewKind } from "@/lib/artifact";
@@ -136,6 +136,19 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return new Response("Too large to preview", { status: 413 });
   }
 
+  /**
+   * The length of what is ACTUALLY on disk, never the `size_bytes` column.
+   *
+   * That column lags: `present_files` fires mid-run and `syncPool` only
+   * re-stamps the row once the agent has finished, so a file can be rewritten
+   * larger while the row still says what it used to be. Sending the stale
+   * number as Content-Length makes the browser stop reading there and hand the
+   * reader a TRUNCATED file — which for a PDF is "Invalid PDF structure" and
+   * for anything else is silent corruption. Found live: a 116 KB PDF whose row
+   * said otherwise arrived as a fragment and would not open.
+   */
+  const onDisk = await statStoredFile(file.storagePath);
+
   // Symlink-safe (audit 2026-09-05): a file the Sandbox replaced with a link
   // is "missing", never followed — see resolveStoredPathForRead.
   let stream: Readable;
@@ -148,7 +161,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   return new Response(Readable.toWeb(stream) as ReadableStream, {
     headers: {
       "Content-Type": TYPE_FOR[kind] ?? "application/octet-stream",
-      "Content-Length": file.sizeBytes.toString(),
+      "Content-Length": String(onDisk?.size ?? file.sizeBytes),
       "Content-Disposition": `inline; filename="${encodeURIComponent(file.filename)}"`,
       // `v` in the URL is what busts the browser cache on a re-present, so
       // this may be cached briefly — but only ever privately.

@@ -77,15 +77,11 @@ async function main() {
     await upsertWorkflow({ userId: user.id, name, description, body: `# ${name}\n\n## Steps\n\n1. …\n\n## Notes from past runs\n` });
   }
 
-  // REAL Chrome: Playwright's bundled Chromium ships no PDF viewer, so an
-  // Office preview photographs as a blank frame however well it works.
-  let browser;
-  try {
-    browser = await chromium.launch({ channel: "chrome" });
-  } catch {
-    console.log("(no local Chrome — PDF previews will photograph blank)");
-    browser = await chromium.launch();
-  }
+  // Plain bundled Chromium is enough again — and that is the point. It ships
+  // no PDF viewer at all, so an Office preview photographing correctly here
+  // proves the pages are drawn by our own renderer rather than by anything the
+  // browser happened to bring.
+  const browser = await chromium.launch();
   try {
     // A couple of folders with chats in them, so the spacing is visible.
     const folders = [];

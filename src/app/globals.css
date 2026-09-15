@@ -529,3 +529,42 @@ select:focus-visible {
     animation: none;
   }
 }
+
+/* ----------------------------------------------------------------------
+   The selectable words over a rendered PDF page.
+
+   pdf.js positions every run with `calc(var(--total-scale-factor) * Npx)`,
+   so the container has to define that arithmetic; only `--scale-factor` is
+   written per render, from JS. `--scale-round-x/y` are what pdf.js's own
+   viewer sets and its `round(down, …)` widths need them to exist.
+
+   The runs are TRANSPARENT: the picture underneath is the document, and this
+   layer exists only so the text can be selected, copied and found — which is
+   the whole difference between a viewer and an image of a page.
+   ---------------------------------------------------------------------- */
+.oi-pdf-text {
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor, 1) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 1;
+}
+.oi-pdf-text :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+.oi-pdf-text ::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}

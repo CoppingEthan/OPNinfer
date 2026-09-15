@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getArtifactMeta, type ArtifactMeta } from "@/app/actions/artifact";
+import { PdfView } from "./pdf-view";
 import {
   formatSize,
   isFramed,
@@ -175,7 +176,7 @@ export function ArtifactPanel() {
 
   if (!fileId) return null;
 
-  /** Rendered by the browser's PDF viewer rather than as a web page. */
+  /** Drawn page by page by PdfView, rather than framed as a web page. */
   const pdfish = meta?.kind === "pdf" || meta?.kind === "office";
 
   const close = () => {
@@ -294,6 +295,15 @@ export function ArtifactPanel() {
               Download {formatSize(meta.sizeBytes)}
             </a>
           </div>
+        ) : pdfish ? (
+          /**
+           * Drawn by US — see PdfView. An <iframe> here hands the file to the
+           * browser's own viewer, which refuses to draw it at all for anyone
+           * who has ticked "Download PDF files instead of automatically
+           * opening them in Chrome": every embedded PDF becomes a grey icon
+           * and an Open button, and no page can detect that it happened.
+           */
+          <PdfView src={previewUrl(meta.id, meta.version)} filename={meta.filename} />
         ) : isFramed(meta.kind) ? (
           <div
             /**
@@ -305,11 +315,7 @@ export function ArtifactPanel() {
              * which would otherwise reflow into a phone layout and stop being
              * the thing it made.
              */
-            style={
-              pdfish
-                ? { width: "100%", height: "100%" }
-                : { width: FRAME_WIDTH * scale, height: `${100 / scale}%` }
-            }
+            style={{ width: FRAME_WIDTH * scale, height: `${100 / scale}%` }}
             className="origin-top-left"
           >
             <iframe
@@ -317,35 +323,17 @@ export function ArtifactPanel() {
               // re-load a frame, and a stale advert is exactly what this panel
               // exists to avoid.
               key={previewUrl(meta.id, meta.version)}
-              // `#toolbar=0&navpanes=0&view=FitH` for a PDF: the panel's own
-              // header already carries the name, the size, Download and
-              // Expand, so the viewer's toolbar and thumbnail rail are a
-              // second set of controls competing with ours in 480px.
-              src={previewUrl(meta.id, meta.version) + (pdfish ? "#toolbar=0&navpanes=0&view=FitH" : "")}
+              src={previewUrl(meta.id, meta.version)}
               title={meta.filename}
-              /**
-               * MARKUP gets `sandbox=""` — belt and braces with the route's
-               * `CSP: sandbox`, and the whole reason an agent-written advert
-               * can be read here safely.
-               *
-               * A PDF must NOT have the attribute at all. Chrome's PDF viewer
-               * is an extension, and it refuses to run inside a sandboxed
-               * frame — measured, all six ways: `sandbox=""` and even
-               * `sandbox="allow-scripts"` both draw the sad-face placeholder,
-               * with or without the header, while no attribute renders the
-               * document. So every Office and PDF preview was a blank panel,
-               * silently: no error, no console line, nothing to search for.
-               * (Playwright's bundled Chromium has no PDF viewer at all, so
-               * this can only be seen in real Chrome — `channel: "chrome"`.)
-               *
-               * Dropping it costs little: the RESPONSE still carries
-               * `CSP: sandbox`, so the document is in an opaque origin, and
-               * `nosniff` with an explicit `application/pdf` means it can
-               * never be re-read as HTML. What a PDF's own scripts can reach
-               * is the viewer, never this page.
-               */
-              {...(meta.kind === "pdf" || meta.kind === "office" ? {} : { sandbox: "" as const })}
-              style={pdfish ? { width: "100%", height: "100%" } : { width: FRAME_WIDTH, transform: `scale(${scale})` }}
+              // Only HTML and SVG are framed now, and both are markup this
+              // person did not write: `sandbox=""` beside the route's
+              // `CSP: sandbox` is what makes reading an agent-built page here
+              // safe. PDFs never reach this element — they are drawn by
+              // PdfView, because Chrome refuses to render one in a sandboxed
+              // frame AND refuses again when the reader has set PDFs to
+              // download. See CLAUDE.md.
+              sandbox=""
+              style={{ width: FRAME_WIDTH, transform: `scale(${scale})` }}
               // A document with no background of its own would otherwise show
               // the browser's default white through a dark page.
               className="h-full origin-top-left border-0 bg-white"

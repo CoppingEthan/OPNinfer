@@ -234,6 +234,11 @@ src/
                             path): per-run bearer in, real key injected, SSE
                             passed through, REAL usage metered. Bearer-authed
                             by a container — EXCLUDED from the middleware matcher
+      pdfjs/                GET /...  — the PDF viewer's worker, character maps
+                            and standard-font metrics, served from the
+                            INSTALLED package (allowlisted, session-authed) so
+                            a portal with no outbound internet renders
+                            documents identically
       pwa/icon/             GET ?size=&maskable= — a home-screen icon rendered
                             from the admin's logo (PUBLIC, and it must be: a
                             browser fetches manifest icons with credentials
@@ -419,6 +424,9 @@ src/
     chat/artifact-panel.tsx the right-hand file preview
     chat/composer-menu.tsx  the composer's `+`: attach a file, or pick a
                             workflow to FORCE for this one message
+    chat/pdf-view.tsx       PDFs rendered by US (pdf.js): a canvas per page
+                            plus a real text layer. The browser's own viewer
+                            is never used — see the gotcha
     ui/dialog.tsx           the app's own confirm/prompt. There is no other
                             kind — window.confirm/prompt are banned (gotchas)
     workflows/              the Workflows page (list + markdown editor +
@@ -1046,13 +1054,17 @@ match. Collapsed → an icon rail (logo, new chat, search, admin, avatar).
   updates almost instantly" true: the browser caches an in-page fetch by URL
   alone, so a re-presented file under the same id would otherwise keep showing
   the old bytes (the bug already fixed once for re-presented images).
-  An HTML artifact renders at a fixed 1200px and SCALES to fit — it was built
-  at an exact size, and the frame is sandboxed into a unique origin so its real
-  width cannot be measured from here. A PDF is the opposite: the browser's
-  viewer already fits the page, so it gets a plain 100% frame (scaling one made
-  a Word document a postage stamp ringed by a full-size toolbar) plus
-  `#toolbar=0&navpanes=0&view=FitH`, since the panel's own header already
-  carries the name, size, Download and Expand.
+  An HTML artifact renders at a fixed 1200px in a sandboxed iframe and SCALES
+  to fit — it was built at an exact size, and the frame is a unique origin so
+  its real width cannot be measured from here.
+  **A PDF is not framed at all: we render it** (`chat/pdf-view.tsx`, pdf.js) —
+  a canvas per page at the panel's width, with a transparent TEXT LAYER over it
+  so the words stay selectable, copyable and findable. That is the difference
+  between a viewer and a picture of a page, and it is why this is not one
+  screenshot per page. Pages are rasterised only as they come near the viewport
+  and re-rasterised when the panel is resized (a scaled-up bitmap is exactly the
+  blurriness this avoids). Everything pdf.js needs is served from this origin by
+  `/api/pdfjs` — no CDN, so an air-gapped portal is identical.
   **Office files preview with their REAL layout** (owner ask, 2026-09-15: "I
   want them to preview exact as office suite would show them"). Not a
   per-format JavaScript renderer — that is three dependencies, three sets of
@@ -1076,6 +1088,15 @@ match. Collapsed → an icon rail (logo, new chat, search, admin, avatar).
   nothing to duplicate.
   The panel SLIDES in (owner ask) — see the keyframe gotcha, which is why it
   is an animation and not a transition.
+  **Presented files show on EVERY message that names them** (owner bug,
+  2026-09-15: "presented files disappear from the chat… they were there
+  before"). `attachFilesToMessages` let the first message to mention a file
+  claim it exclusively, so when somebody attached a document and the assistant
+  PRESENTED THE SAME ONE BACK, the reply's cards were dropped — but only on
+  reload, because while the reply streamed the cards came from the `files` SSE
+  event and looked right. `meta.fileIds` is authoritative and two turns may
+  legitimately name one file; the claimed set now decides only whether a file
+  still NEEDS a home, never whether it may have a second.
   Proof: `artifact.test.ts` (27) + `artifact-panel.test.ts` (4 source pins, for
   the two failures with no runtime symptom) + `scripts/test-artifact-panel.ts`
   (24 live browser checks, no model calls: a real .docx built in the harness
@@ -2572,24 +2593,49 @@ login screen). The assistant's own name + logo are separate (assistant config).
   `~/.claude` owned by uid 1000). On Windows a Linux symlink on a bind mount
   is invisible to host `lstat` — check from inside a container. `DEBUG_CLAUDE_
   AGENT_SDK=1` writes the SDK's own transport log (path printed to stderr).
-- **Chrome's PDF viewer REFUSES to run in a sandboxed frame, and says nothing
-  about it** (2026-09-15). The artifact panel framed every preview with
-  `sandbox=""` as belt and braces beside the route's `CSP: sandbox` — correct
-  and load-bearing for an agent-written HTML page, and fatal for a PDF: the
-  viewer is a browser extension, so a sandboxed frame draws the sad-face
-  placeholder instead. Every Office and PDF preview was therefore a blank
-  panel, with no error, no console line and nothing to search a log for.
-  Measured rather than reasoned, all six ways: `sandbox=""` AND
-  `sandbox="allow-scripts"` both fail with or without the header; no attribute
-  renders the document. So the attribute is applied to MARKUP only. Dropping it
-  for a PDF costs little — the response still carries `CSP: sandbox` (opaque
-  origin) and `nosniff` with an explicit `application/pdf`, so it can never be
-  re-read as HTML, and what a PDF's own scripts can reach is the viewer, never
-  the page. **Playwright's bundled Chromium has no PDF viewer at all**, so it
-  draws a blank frame whether the code is right or wrong: this is only visible
-  in real Chrome (`chromium.launch({ channel: "chrome" })`, which is what
-  `scripts/shot-workspace.ts` uses), and what the headless harness CAN check is
-  the attribute. Pinned from source by `artifact-panel.test.ts`.
+- **The browser's PDF viewer cannot be relied on to display a PDF, for TWO
+  independent reasons, and neither is detectable from the page** (2026-09-15).
+  The panel originally framed PDFs and let the browser draw them.
+  (1) **A sandboxed frame is refused outright.** Chrome's viewer is an
+  extension; `sandbox=""` — correct and load-bearing for an agent-written HTML
+  page — makes it draw a sad-face placeholder instead. Measured all six ways:
+  `sandbox=""` AND `sandbox="allow-scripts"` fail with or without the CSP
+  header; no attribute renders.
+  (2) **And even unsandboxed, a reader who has ticked "Download PDF files
+  instead of automatically opening them in Chrome" gets a grey icon and an
+  Open button** in place of every embedded PDF on the web, ours included. That
+  is a per-profile setting we cannot read, and it is what the owner actually
+  saw. Reproduced exactly by launching a persistent profile with
+  `plugins.always_open_pdf_externally`.
+  So **we render PDFs ourselves** (`pdf-view.tsx`, pdf.js) and the iframe is
+  markup-only again — which is also why `sandbox=""` on it is unconditional
+  once more. Two consequences worth knowing: Playwright's bundled Chromium has
+  NO PDF viewer at all, which used to make it useless for this and now makes it
+  the strictest possible negative control (pixels there can only be ours); and
+  an Office file is converted to PDF server-side and then drawn by the same
+  renderer, so there is exactly ONE rendering path for every document.
+- **`require.resolve` inside a route handler does not return a path**
+  (2026-09-15, cost a debugging round). Webpack rewrites it — `createRequire(
+  import.meta.url).resolve("pdfjs-dist/package.json")` came back as
+  `(rsc)/./node_modules/.pnpm/pdfjs-dist@6.3.289/…`, a webpack module path that
+  no `stat` will ever find. The asset route then 404'd every request, pdf.js
+  fell back to its "fake worker", and the only symptom was a document that
+  never opened. Anything that needs a package's location ON DISK must walk the
+  filesystem (`process.cwd()/node_modules/<pkg>`, with the `.pnpm` store as a
+  fallback) and THROW when it cannot find it. Pinned by
+  `artifact-panel.test.ts`, over code lines only — the comment explaining why
+  `require.resolve` is absent would otherwise fail the assertion, the trap
+  `ui/dialog.test.ts` already fell into.
+- **Content-Length must describe the BYTES BEING SENT, never a database
+  column** (2026-09-15, found on a real document). The preview route streamed
+  the file from disk while declaring `files.size_bytes`, and that column LAGS —
+  `present_files` fires mid-run and `syncPool` only re-stamps the row when the
+  agent finishes. When they disagreed the browser stopped reading at the
+  number and handed the reader a truncated file: a 116 KB PDF arrived as a
+  fragment and pdf.js refused it as "Invalid PDF structure". Any route
+  streaming a stored file reads the length with `statStoredFile` — the same
+  reason image URLs already take their version from the disk's mtime. Live
+  regression in `test-artifact-panel.ts` with a deliberately wrong row.
 - **An element that mounts and animates in the same frame does not animate.**
   A CSS transition needs the browser to have painted the starting state; a
   panel inserted at `translate-x-full` and flipped to `translate-x-0` one
